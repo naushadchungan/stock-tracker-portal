@@ -114,6 +114,7 @@ export interface UploadInput {
 
 export interface AuthUser {
   id: string;
+  username: string;
   /** @nullable */
   email: string | null;
   /** @nullable */
@@ -129,27 +130,73 @@ export interface AuthUserEnvelope {
   user: AuthUser | null;
 }
 
-export interface MobileTokenExchangeRequest {
+export interface LoginRequest {
   /** @minLength 1 */
-  code: string;
+  username: string;
   /** @minLength 1 */
-  code_verifier: string;
-  /** @minLength 1 */
-  redirect_uri: string;
-  /** @minLength 1 */
-  state: string;
-  /** @minLength 1 */
-  nonce?: string;
+  password: string;
 }
 
-export interface MobileTokenExchangeSuccess {
-  token: string;
+export interface UserRecord {
+  id: string;
+  username: string;
+  /** @nullable */
+  email?: string | null;
+  /** @nullable */
+  firstName?: string | null;
+  /** @nullable */
+  lastName?: string | null;
+  role: string;
+  createdAt: string;
 }
 
-export const LogoutSuccessValue = {
-  success: true,
+export interface UserEnvelope {
+  user: UserRecord;
+}
+
+export interface UserListEnvelope {
+  users: UserRecord[];
+}
+
+export type CreateUserRequestRole = typeof CreateUserRequestRole[keyof typeof CreateUserRequestRole];
+
+
+export const CreateUserRequestRole = {
+  admin: 'admin',
+  user: 'user',
 } as const;
-export type LogoutSuccess = typeof LogoutSuccessValue;
+
+export interface CreateUserRequest {
+  /** @minLength 1 */
+  username: string;
+  /** @minLength 1 */
+  password: string;
+  role?: CreateUserRequestRole;
+  email?: string;
+  firstName?: string;
+  lastName?: string;
+}
+
+export type UpdateUserRequestRole = typeof UpdateUserRequestRole[keyof typeof UpdateUserRequestRole];
+
+
+export const UpdateUserRequestRole = {
+  admin: 'admin',
+  user: 'user',
+} as const;
+
+export interface UpdateUserRequest {
+  role?: UpdateUserRequestRole;
+  /** @minLength 1 */
+  password?: string;
+  email?: string;
+  firstName?: string;
+  lastName?: string;
+}
+
+export interface LogoutSuccess {
+  success: boolean;
+}
 
 export interface ErrorEnvelope {
   error: string;
@@ -159,20 +206,6 @@ export interface ErrorEnvelope {
  * Opaque session token — `Bearer <sid>`.
  */
 export type AuthorizationSessionHeaderParameter = string;
-
-export type BeginBrowserLoginParams = {
-returnTo?: string;
-};
-
-export type HandleBrowserLoginCallbackParams = {
-code?: string;
-state?: string;
-iss?: string;
-};
-
-export type LogoutBrowserSessionParams = {
-returnTo?: string;
-};
 
 export type UpdateDepotBody = {
   name?: string;

@@ -8,53 +8,34 @@ interface AuthState {
   isLoading: boolean;
   isAuthenticated: boolean;
   isAdmin: boolean;
-  login: () => void;
-  logout: () => void;
-}
-
-function getBasePath() {
-  const env = (import.meta as unknown as { env?: { BASE_URL?: string } }).env;
-  return env?.BASE_URL?.replace(/\/+$/, '') || '/';
+  logout: () => Promise<void>;
+  refreshUser: () => Promise<void>;
 }
 
 export function useAuth(): AuthState {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  const fetchUser = useCallback(async () => {
+    try {
+      const res = await fetch('/api/auth/user', { credentials: 'include' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = (await res.json()) as { user: AuthUser | null };
+      setUser(data.user ?? null);
+    } catch {
+      setUser(null);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    let cancelled = false;
+    fetchUser();
+  }, [fetchUser]);
 
-    fetch('/api/auth/user', { credentials: 'include' })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<{ user: AuthUser | null }>;
-      })
-      .then((data) => {
-        if (!cancelled) {
-          setUser(data.user ?? null);
-          setIsLoading(false);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setUser(null);
-          setIsLoading(false);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const login = useCallback(() => {
-    const base = getBasePath();
-    window.location.href = `/api/login?returnTo=${encodeURIComponent(base)}`;
-  }, []);
-
-  const logout = useCallback(() => {
-    const base = getBasePath();
-    window.location.href = `/api/logout?returnTo=${encodeURIComponent(base)}`;
+  const logout = useCallback(async () => {
+    await fetch('/api/logout', { method: 'POST', credentials: 'include' });
+    setUser(null);
   }, []);
 
   return {
@@ -62,7 +43,7 @@ export function useAuth(): AuthState {
     isLoading,
     isAuthenticated: !!user,
     isAdmin: user?.role === 'admin',
-    login,
     logout,
+    refreshUser: fetchUser,
   };
 }

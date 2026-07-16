@@ -6,8 +6,8 @@ interface AuthContextValue {
   isLoading: boolean
   isAuthenticated: boolean
   isAdmin: boolean
-  login: () => void
-  logout: () => void
+  logout: () => Promise<void>
+  refreshUser: () => Promise<void>
 }
 
 const AuthContext = React.createContext<AuthContextValue | null>(null)

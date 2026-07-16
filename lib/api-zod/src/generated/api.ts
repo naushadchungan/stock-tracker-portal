@@ -11,13 +11,10 @@ import * as zod from 'zod';
 /**
  * @summary Get the currently authenticated user
  */
-export const GetCurrentAuthUserHeader = zod.object({
-  "Authorization": zod.string().optional().describe('Opaque session token — `Bearer <sid>`.')
-})
-
 export const GetCurrentAuthUserResponse = zod.object({
   "user": zod.union([zod.object({
   "id": zod.string(),
+  "username": zod.string(),
   "email": zod.string().nullable(),
   "firstName": zod.string().nullable(),
   "lastName": zod.string().nullable(),
@@ -28,74 +25,122 @@ export const GetCurrentAuthUserResponse = zod.object({
 
 
 /**
- * @summary Start the browser OIDC login flow
- */
-export const BeginBrowserLoginQueryParams = zod.object({
-  "returnTo": zod.coerce.string().optional()
-})
-
-export const BeginBrowserLoginResponse = zod.void()
-
-
-/**
- * @summary Complete the browser OIDC login flow
- */
-export const HandleBrowserLoginCallbackQueryParams = zod.object({
-  "code": zod.coerce.string().optional(),
-  "state": zod.coerce.string().optional(),
-  "iss": zod.coerce.string().optional()
-})
-
-export const HandleBrowserLoginCallbackResponse = zod.void()
-
-
-/**
- * @summary Clear the session and begin OIDC logout
- */
-export const logoutBrowserSessionQueryReturnToDefault = `/`;
-
-export const LogoutBrowserSessionQueryParams = zod.object({
-  "returnTo": zod.coerce.string().default(logoutBrowserSessionQueryReturnToDefault)
-})
-
-export const LogoutBrowserSessionHeader = zod.object({
-  "Authorization": zod.string().optional().describe('Opaque session token — `Bearer <sid>`.')
-})
-
-export const LogoutBrowserSessionResponse = zod.void()
-
-
-/**
- * @summary Exchange a mobile OIDC code for a session token
+ * @summary Sign in with username and password
  */
 
 
 
 
-
-
-
-export const ExchangeMobileAuthorizationCodeBody = zod.object({
-  "code": zod.string().min(1),
-  "code_verifier": zod.string().min(1),
-  "redirect_uri": zod.string().min(1),
-  "state": zod.string().min(1),
-  "nonce": zod.string().min(1).optional()
+export const LoginWithPasswordBody = zod.object({
+  "username": zod.string().min(1),
+  "password": zod.string().min(1)
 })
 
-export const ExchangeMobileAuthorizationCodeResponse = zod.object({
-  "token": zod.string()
+export const LoginWithPasswordResponse = zod.object({
+  "user": zod.union([zod.object({
+  "id": zod.string(),
+  "username": zod.string(),
+  "email": zod.string().nullable(),
+  "firstName": zod.string().nullable(),
+  "lastName": zod.string().nullable(),
+  "profileImageUrl": zod.string().nullable(),
+  "role": zod.string()
+}),zod.null()])
 })
 
 
 /**
- * @summary Delete a mobile session token
+ * @summary Sign out and clear session
  */
-export const LogoutMobileSessionHeader = zod.object({
-  "Authorization": zod.string().optional().describe('Opaque session token — `Bearer <sid>`.')
+export const LogoutResponse = zod.object({
+  "success": zod.boolean()
 })
 
-export const LogoutMobileSessionResponse = zod.object({
+
+/**
+ * @summary List all users (admin only)
+ */
+export const ListUsersResponse = zod.object({
+  "users": zod.array(zod.object({
+  "id": zod.string(),
+  "username": zod.string(),
+  "email": zod.string().nullish(),
+  "firstName": zod.string().nullish(),
+  "lastName": zod.string().nullish(),
+  "role": zod.string(),
+  "createdAt": zod.coerce.date()
+}))
+})
+
+
+/**
+ * @summary Create a new user (admin only)
+ */
+
+
+
+
+export const CreateUserBody = zod.object({
+  "username": zod.string().min(1),
+  "password": zod.string().min(1),
+  "role": zod.enum(['admin', 'user']).optional(),
+  "email": zod.string().optional(),
+  "firstName": zod.string().optional(),
+  "lastName": zod.string().optional()
+})
+
+export const CreateUserResponse = zod.object({
+  "user": zod.object({
+  "id": zod.string(),
+  "username": zod.string(),
+  "email": zod.string().nullish(),
+  "firstName": zod.string().nullish(),
+  "lastName": zod.string().nullish(),
+  "role": zod.string(),
+  "createdAt": zod.coerce.date()
+})
+})
+
+
+/**
+ * @summary Update a user's role or password (admin only)
+ */
+export const UpdateUserParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+
+
+
+export const UpdateUserBody = zod.object({
+  "role": zod.enum(['admin', 'user']).optional(),
+  "password": zod.string().min(1).optional(),
+  "email": zod.string().optional(),
+  "firstName": zod.string().optional(),
+  "lastName": zod.string().optional()
+})
+
+export const UpdateUserResponse = zod.object({
+  "user": zod.object({
+  "id": zod.string(),
+  "username": zod.string(),
+  "email": zod.string().nullish(),
+  "firstName": zod.string().nullish(),
+  "lastName": zod.string().nullish(),
+  "role": zod.string(),
+  "createdAt": zod.coerce.date()
+})
+})
+
+
+/**
+ * @summary Delete a user (admin only)
+ */
+export const DeleteUserParams = zod.object({
+  "id": zod.coerce.string()
+})
+
+export const DeleteUserResponse = zod.object({
   "success": zod.boolean()
 })
 

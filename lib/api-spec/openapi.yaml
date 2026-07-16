@@ -11,7 +11,9 @@ tags:
   - name: health
     description: Health operations
   - name: Auth
-    description: Browser and mobile authentication endpoints.
+    description: Authentication endpoints.
+  - name: users
+    description: User management (admin only)
   - name: depots
     description: Depot management
   - name: stock
@@ -25,9 +27,6 @@ paths:
       tags: [Auth]
       operationId: getCurrentAuthUser
       summary: Get the currently authenticated user
-      parameters:
-        - $ref: '#/components/parameters/AuthorizationSessionHeader'
-        - $ref: '#/components/parameters/SessionCookie'
       responses:
         '200':
           description: Auth status resolved successfully.
@@ -36,110 +35,148 @@ paths:
               schema:
                 $ref: '#/components/schemas/AuthUserEnvelope'
   /login:
-    get:
-      tags: [Auth]
-      operationId: beginBrowserLogin
-      summary: Start the browser OIDC login flow
-      parameters:
-        - name: returnTo
-          in: query
-          required: false
-          schema:
-            type: string
-      responses:
-        '302':
-          description: Redirect to the OIDC authorization endpoint.
-  /callback:
-    get:
-      tags: [Auth]
-      operationId: handleBrowserLoginCallback
-      summary: Complete the browser OIDC login flow
-      parameters:
-        - name: code
-          in: query
-          required: false
-          schema:
-            type: string
-        - name: state
-          in: query
-          required: false
-          schema:
-            type: string
-        - name: iss
-          in: query
-          required: false
-          schema:
-            type: string
-      responses:
-        '302':
-          description: Redirect to the returnTo path on success or /api/login on failure.
-  /logout:
-    get:
-      tags: [Auth]
-      operationId: logoutBrowserSession
-      summary: Clear the session and begin OIDC logout
-      parameters:
-        - $ref: '#/components/parameters/AuthorizationSessionHeader'
-        - $ref: '#/components/parameters/SessionCookie'
-        - name: returnTo
-          in: query
-          required: false
-          schema:
-            type: string
-            default: /
-      responses:
-        '302':
-          description: Redirect to the OIDC provider logout URL.
-  /mobile-auth/token-exchange:
     post:
       tags: [Auth]
-      operationId: exchangeMobileAuthorizationCode
-      summary: Exchange a mobile OIDC code for a session token
+      operationId: loginWithPassword
+      summary: Sign in with username and password
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/MobileTokenExchangeRequest'
+              $ref: '#/components/schemas/LoginRequest'
       responses:
         '200':
-          description: Session created successfully.
+          description: Login successful.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MobileTokenExchangeSuccess'
+                $ref: '#/components/schemas/AuthUserEnvelope'
         '400':
-          description: Missing or invalid required fields.
+          description: Missing credentials.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
         '401':
-          description: Token did not contain usable claims.
+          description: Invalid username or password.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorEnvelope'
-        '500':
-          description: Token exchange failed.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-  /mobile-auth/logout:
+  /logout:
     post:
       tags: [Auth]
-      operationId: logoutMobileSession
-      summary: Delete a mobile session token
-      parameters:
-        - $ref: '#/components/parameters/AuthorizationSessionHeader'
+      operationId: logout
+      summary: Sign out and clear session
       responses:
         '200':
-          description: Logout processed.
+          description: Logged out successfully.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/LogoutSuccess'
+
+  /users:
+    get:
+      tags: [users]
+      operationId: listUsers
+      summary: List all users (admin only)
+      responses:
+        '200':
+          description: List of users.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserListEnvelope'
+    post:
+      tags: [users]
+      operationId: createUser
+      summary: Create a new user (admin only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '201':
+          description: User created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserEnvelope'
+        '400':
+          description: Validation error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '409':
+          description: Username already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /users/{id}:
+    patch:
+      tags: [users]
+      operationId: updateUser
+      summary: Update a user's role or password (admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateUserRequest'
+      responses:
+        '200':
+          description: User updated.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserEnvelope'
+        '404':
+          description: User not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    delete:
+      tags: [users]
+      operationId: deleteUser
+      summary: Delete a user (admin only)
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User deleted.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LogoutSuccess'
+        '400':
+          description: Cannot delete yourself.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+        '404':
+          description: User not found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
 
   /healthz:
     get:
@@ -650,9 +687,11 @@ components:
 
     AuthUser:
       type: object
-      required: [id, email, firstName, lastName, profileImageUrl, role]
+      required: [id, username, email, firstName, lastName, profileImageUrl, role]
       properties:
         id:
+          type: string
+        username:
           type: string
         email:
           type: [string, 'null']
@@ -672,30 +711,82 @@ components:
           oneOf:
             - $ref: '#/components/schemas/AuthUser'
             - type: 'null'
-    MobileTokenExchangeRequest:
+    LoginRequest:
       type: object
-      required: [code, code_verifier, redirect_uri, state]
+      required: [username, password]
       properties:
-        code:
+        username:
           type: string
           minLength: 1
-        code_verifier:
+        password:
           type: string
           minLength: 1
-        redirect_uri:
-          type: string
-          minLength: 1
-        state:
-          type: string
-          minLength: 1
-        nonce:
-          type: string
-          minLength: 1
-    MobileTokenExchangeSuccess:
+    UserRecord:
       type: object
-      required: [token]
+      required: [id, username, role, createdAt]
       properties:
-        token:
+        id:
+          type: string
+        username:
+          type: string
+        email:
+          type: [string, 'null']
+        firstName:
+          type: [string, 'null']
+        lastName:
+          type: [string, 'null']
+        role:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    UserEnvelope:
+      type: object
+      required: [user]
+      properties:
+        user:
+          $ref: '#/components/schemas/UserRecord'
+    UserListEnvelope:
+      type: object
+      required: [users]
+      properties:
+        users:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserRecord'
+    CreateUserRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 1
+        role:
+          type: string
+          enum: [admin, user]
+        email:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: string
+    UpdateUserRequest:
+      type: object
+      properties:
+        role:
+          type: string
+          enum: [admin, user]
+        password:
+          type: string
+          minLength: 1
+        email:
+          type: string
+        firstName:
+          type: string
+        lastName:
           type: string
     LogoutSuccess:
       type: object
@@ -703,7 +794,6 @@ components:
       properties:
         success:
           type: boolean
-          const: true
     ErrorEnvelope:
       type: object
       required: [error]

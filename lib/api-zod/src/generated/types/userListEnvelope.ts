@@ -5,7 +5,8 @@
  * Tiles Stock Management API
  * OpenAPI spec version: 0.1.0
  */
+import type { UserRecord } from './userRecord';
 
-export interface MobileTokenExchangeSuccess {
-  token: string;
+export interface UserListEnvelope {
+  users: UserRecord[];
 }

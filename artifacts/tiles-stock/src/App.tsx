@@ -11,6 +11,7 @@ import StockSearch from '@/pages/stock';
 import UploadReport from '@/pages/upload';
 import DepotsList from '@/pages/depots';
 import LoginPage from '@/pages/login';
+import UsersPage from '@/pages/users';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -46,6 +47,7 @@ function AppRoutes() {
         <Route path="/stock" component={StockSearch} />
         <Route path="/upload" component={UploadReport} />
         <Route path="/depots" component={DepotsList} />
+        <Route path="/users" component={UsersPage} />
         <Route component={NotFound} />
       </Switch>
     </Layout>

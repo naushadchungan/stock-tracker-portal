@@ -5,9 +5,8 @@
  * Tiles Stock Management API
  * OpenAPI spec version: 0.1.0
  */
+import type { UserRecord } from './userRecord';
 
-export type HandleBrowserLoginCallbackParams = {
-code?: string;
-state?: string;
-iss?: string;
-};
+export interface UserEnvelope {
+  user: UserRecord;
+}

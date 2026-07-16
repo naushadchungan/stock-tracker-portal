@@ -1,6 +1,9 @@
 import * as React from "react"
 import { Link, useLocation } from "wouter"
-import { Package, Search, UploadCloud, Building2, LayoutDashboard, Menu, LogOut, ShieldCheck } from "lucide-react"
+import {
+  Package, Search, UploadCloud, Building2,
+  LayoutDashboard, Menu, LogOut, ShieldCheck, Users
+} from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/contexts/auth"
 
@@ -17,12 +20,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   const adminNavItems = [
     { href: "/upload", label: "Upload Report", icon: UploadCloud },
+    { href: "/users", label: "Manage Users", icon: Users },
   ]
 
   const navItems = isAdmin ? [...baseNavItems, ...adminNavItems] : baseNavItems
 
   const displayName = user
-    ? [user.firstName, user.lastName].filter(Boolean).join(" ") || user.email || "User"
+    ? [user.firstName, user.lastName].filter(Boolean).join(" ") || user.username || "User"
     : "User"
 
   const initials = displayName
@@ -31,6 +35,10 @@ export function Layout({ children }: { children: React.ReactNode }) {
     .slice(0, 2)
     .join("")
     .toUpperCase() || "U"
+
+  async function handleLogout() {
+    await logout()
+  }
 
   return (
     <div className="flex min-h-[100dvh] w-full bg-background flex-col md:flex-row">
@@ -68,7 +76,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </div>
           {navItems.map((item) => {
             const Icon = item.icon
-            const isActive = location === item.href || (item.href !== "/" && location.startsWith(item.href))
+            const isActive =
+              location === item.href ||
+              (item.href !== "/" && location.startsWith(item.href))
             return (
               <Link
                 key={item.href}
@@ -93,7 +103,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-3 px-3 py-2 rounded-md">
             <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm shrink-0">
               {user?.profileImageUrl ? (
-                <img src={user.profileImageUrl} alt={displayName} className="h-8 w-8 rounded-full object-cover" />
+                <img
+                  src={user.profileImageUrl}
+                  alt={displayName}
+                  className="h-8 w-8 rounded-full object-cover"
+                />
               ) : (
                 initials
               )}
@@ -113,7 +127,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
             </div>
           </div>
           <button
-            onClick={logout}
+            onClick={handleLogout}
             className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
           >
             <LogOut className="h-3.5 w-3.5" />

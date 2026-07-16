@@ -6,7 +6,6 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export const LogoutSuccessValue = {
-  success: true,
-} as const;
-export type LogoutSuccess = typeof LogoutSuccessValue;
+export interface LogoutSuccess {
+  success: boolean;
+}
