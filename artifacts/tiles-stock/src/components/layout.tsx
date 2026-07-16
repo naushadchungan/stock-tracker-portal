@@ -1,18 +1,36 @@
 import * as React from "react"
 import { Link, useLocation } from "wouter"
-import { Package, Search, UploadCloud, Building2, LayoutDashboard, Settings, Menu } from "lucide-react"
+import { Package, Search, UploadCloud, Building2, LayoutDashboard, Menu, LogOut, ShieldCheck } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { useAuth } from "@/contexts/auth"
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation()
   const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false)
+  const { user, isAdmin, logout } = useAuth()
 
-  const navItems = [
+  const baseNavItems = [
     { href: "/", label: "Dashboard", icon: LayoutDashboard },
     { href: "/stock", label: "Stock Search", icon: Search },
-    { href: "/upload", label: "Upload Report", icon: UploadCloud },
     { href: "/depots", label: "Depots", icon: Building2 },
   ]
+
+  const adminNavItems = [
+    { href: "/upload", label: "Upload Report", icon: UploadCloud },
+  ]
+
+  const navItems = isAdmin ? [...baseNavItems, ...adminNavItems] : baseNavItems
+
+  const displayName = user
+    ? [user.firstName, user.lastName].filter(Boolean).join(" ") || user.email || "User"
+    : "User"
+
+  const initials = displayName
+    .split(" ")
+    .map((p) => p[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase() || "U"
 
   return (
     <div className="flex min-h-[100dvh] w-full bg-background flex-col md:flex-row">
@@ -70,16 +88,37 @@ export function Layout({ children }: { children: React.ReactNode }) {
           })}
         </nav>
 
-        <div className="p-4 border-t border-border/50">
-          <div className="flex items-center gap-3 px-3 py-2 text-sm text-muted-foreground">
-            <div className="h-8 w-8 rounded bg-muted flex items-center justify-center text-foreground font-bold">
-              K
+        {/* User info + logout */}
+        <div className="p-4 border-t border-border/50 space-y-2">
+          <div className="flex items-center gap-3 px-3 py-2 rounded-md">
+            <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm shrink-0">
+              {user?.profileImageUrl ? (
+                <img src={user.profileImageUrl} alt={displayName} className="h-8 w-8 rounded-full object-cover" />
+              ) : (
+                initials
+              )}
             </div>
-            <div>
-              <p className="font-semibold text-foreground text-xs leading-none">Kerala Operations</p>
-              <p className="text-xs mt-1">Staff Portal</p>
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-foreground text-xs leading-none truncate">{displayName}</p>
+              <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1">
+                {isAdmin ? (
+                  <>
+                    <ShieldCheck className="h-3 w-3 text-primary" />
+                    <span className="text-primary font-medium">Admin</span>
+                  </>
+                ) : (
+                  "Staff"
+                )}
+              </p>
             </div>
           </div>
+          <button
+            onClick={logout}
+            className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+          >
+            <LogOut className="h-3.5 w-3.5" />
+            Sign out
+          </button>
         </div>
       </aside>
 

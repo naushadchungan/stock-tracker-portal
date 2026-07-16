@@ -42,6 +42,7 @@ import {
   useGetStockSummary,
   type Depot
 } from "@workspace/api-client-react"
+import { useAuth } from "@/contexts/auth"
 
 const depotSchema = z.object({
   name: z.string().min(1, "Depot name is required").max(100),
@@ -57,6 +58,7 @@ export default function DepotsList() {
   const [isDeleting, setIsDeleting] = React.useState(false)
   const queryClient = useQueryClient()
   const [, setLocation] = useLocation()
+  const { isAdmin } = useAuth()
 
   const { data: depots, isLoading: isLoadingDepots } = useListDepots()
   const { data: summary, isLoading: isLoadingSummary } = useGetStockSummary()
@@ -133,10 +135,12 @@ export default function DepotsList() {
           </p>
         </div>
         
-        <Button onClick={() => setIsCreateOpen(true)} className="w-full sm:w-auto">
-          <Plus className="h-4 w-4 mr-2" />
-          Add Depot
-        </Button>
+        {isAdmin && (
+          <Button onClick={() => setIsCreateOpen(true)} className="w-full sm:w-auto">
+            <Plus className="h-4 w-4 mr-2" />
+            Add Depot
+          </Button>
+        )}
       </div>
 
       {isLoading ? (
@@ -180,26 +184,28 @@ export default function DepotsList() {
                 <CardHeader className="pb-3">
                   <CardTitle className="text-xl font-bold flex items-center justify-between">
                     <span className="truncate pr-2">{depot.name}</span>
-                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7"
-                        onClick={() => openEdit(depot)}
-                        title="Edit depot"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
-                        onClick={() => setDeletingDepot(depot)}
-                        title="Delete depot"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
+                    {isAdmin && (
+                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7"
+                          onClick={() => openEdit(depot)}
+                          title="Edit depot"
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
+                          onClick={() => setDeletingDepot(depot)}
+                          title="Delete depot"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    )}
                   </CardTitle>
                   {depot.location && (
                     <CardDescription className="flex items-center gap-1.5 mt-1">
@@ -226,7 +232,7 @@ export default function DepotsList() {
                     </div>
                   </div>
                   
-                  <div className="grid grid-cols-2 gap-2 mt-auto">
+                  <div className={`grid gap-2 mt-auto ${isAdmin ? 'grid-cols-2' : 'grid-cols-1'}`}>
                     <Button 
                       variant="outline" 
                       className="w-full"
@@ -234,13 +240,15 @@ export default function DepotsList() {
                     >
                       View Stock
                     </Button>
-                    <Button 
-                      variant="secondary" 
-                      className="w-full"
-                      onClick={() => setLocation(`/upload?depotId=${depot.id}`)}
-                    >
-                      Upload
-                    </Button>
+                    {isAdmin && (
+                      <Button 
+                        variant="secondary" 
+                        className="w-full"
+                        onClick={() => setLocation(`/upload?depotId=${depot.id}`)}
+                      >
+                        Upload
+                      </Button>
+                    )}
                   </div>
                 </CardContent>
               </Card>

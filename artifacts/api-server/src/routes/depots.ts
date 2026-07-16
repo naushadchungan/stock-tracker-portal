@@ -3,6 +3,7 @@ import { db } from "@workspace/db";
 import { depotsTable, uploadsTable, stockItemsTable } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { CreateDepotBody, UpdateDepotBody } from "@workspace/api-zod";
+import { requireAdmin } from "../middlewares/requireAuth";
 
 const router = Router();
 
@@ -32,8 +33,8 @@ router.get("/", async (req, res) => {
   }
 });
 
-// POST /api/depots
-router.post("/", async (req, res) => {
+// POST /api/depots — admin only
+router.post("/", requireAdmin, async (req, res) => {
   try {
     const parsed = CreateDepotBody.safeParse(req.body);
     if (!parsed.success) {
@@ -76,8 +77,8 @@ router.get("/:id", async (req, res) => {
   }
 });
 
-// PATCH /api/depots/:id
-router.patch("/:id", async (req, res) => {
+// PATCH /api/depots/:id — admin only
+router.patch("/:id", requireAdmin, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });
@@ -122,8 +123,8 @@ router.patch("/:id", async (req, res) => {
   }
 });
 
-// DELETE /api/depots/:id
-router.delete("/:id", async (req, res) => {
+// DELETE /api/depots/:id — admin only
+router.delete("/:id", requireAdmin, async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });

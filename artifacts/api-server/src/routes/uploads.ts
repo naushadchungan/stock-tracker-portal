@@ -9,6 +9,7 @@ import { uploadsTable, stockItemsTable, depotsTable } from "@workspace/db";
 import { eq, desc } from "drizzle-orm";
 import { tmpdir } from "os";
 import { randomBytes } from "crypto";
+import { requireAdmin } from "../middlewares/requireAuth";
 
 const execAsync = promisify(exec);
 
@@ -313,8 +314,8 @@ router.get("/", async (req, res) => {
   }
 });
 
-// POST /api/uploads (multipart)
-router.post("/", upload.single("file"), async (req, res) => {
+// POST /api/uploads (multipart) — admin only
+router.post("/", requireAdmin, upload.single("file"), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: "PDF file is required" });
   }
