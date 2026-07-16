@@ -76,21 +76,9 @@ def has_text(doc):
             return True
     return False
 
-# ── text-based parser ────────────────────────────────────────────────────────
-BOX_NUM_RE = re.compile(r'^[\\d]+\\.?\\d*\\s*(BOX)?$', re.IGNORECASE)
-NIL_RE     = re.compile(r'^nil$', re.IGNORECASE)
-SKIP_PAT   = re.compile(
-    r'^(item\\s+name|name|box|pcs|design|stock\\s+list|epoxy|adhesive|topkrete|'
-    r'cp\\s+water|millennium|dispatched|despatch|plain\\s+colour)',
-    re.IGNORECASE
-)
-TRIVIAL_CATS = {
-    '1200X600 GLOSSY','1200X600 MATT','600X1200 GLOSSY','800X2400','1600X800',
-    '600X600','1800X1200','800X800','600X600 GLOSSY','600X600 MATT',
-    '1800X1200 GLOSSY','1600X800 GLOSSY','1600X800 MATT'
-}
-
-def extract_page_images(page, doc):
+# ── image extraction (shared by both parsers) ────────────────────────────────
+# min_w/min_h: skip tiny decoration; max_w/max_h: skip full-page scans & logos
+def extract_page_images(page, doc, min_w=80, min_h=60, max_w=380, max_h=380):
     images = []
     try:
         seen = set()
@@ -104,7 +92,10 @@ def extract_page_images(page, doc):
                 if not rects:
                     continue
                 rect = rects[0]
-                if rect.width < 80 or rect.height < 80:
+                w, h = rect.width, rect.height
+                if w < min_w or h < min_h:
+                    continue
+                if w > max_w or h > max_h:
                     continue
                 img_dict = doc.extract_image(xref)
                 if not img_dict or not img_dict.get('image'):
@@ -112,13 +103,31 @@ def extract_page_images(page, doc):
                 raw = img_dict['image']
                 if len(raw) > 600000:
                     continue
-                images.append({'b64': base64.b64encode(raw).decode('utf-8'), 'y': rect.y0, 'x': rect.x0})
+                images.append({
+                    'b64': base64.b64encode(raw).decode('utf-8'),
+                    'y': rect.y0,
+                    'x': rect.x0,
+                })
             except Exception:
                 pass
     except Exception:
         pass
     images.sort(key=lambda i: (round(i['y'] / 150) * 150, i['x']))
     return images
+
+# ── text-based parser ────────────────────────────────────────────────────────
+BOX_NUM_RE = re.compile(r'^[\\d]+\\.?\\d*\\s*(BOX)?$', re.IGNORECASE)
+NIL_RE     = re.compile(r'^nil$', re.IGNORECASE)
+SKIP_PAT   = re.compile(
+    r'^(item\\s+name|name|box|pcs|design|stock\\s+list|epoxy|adhesive|topkrete|'
+    r'cp\\s+water|millennium|dispatched|despatch|plain\\s+colour)',
+    re.IGNORECASE
+)
+TRIVIAL_CATS = {
+    '1200X600 GLOSSY','1200X600 MATT','600X1200 GLOSSY','800X2400','1600X800',
+    '600X600','1800X1200','800X800','600X600 GLOSSY','600X600 MATT',
+    '1800X1200 GLOSSY','1600X800 GLOSSY','1600X800 MATT'
+}
 
 def parse_text_pdf(doc):
     results = []
@@ -172,7 +181,6 @@ def parse_text_pdf(doc):
     return results
 
 # ── OCR-based parser (image/scanned PDFs) ────────────────────────────────────
-# Matches: "TILE NAME  123 BOX" or "TILE NAME  OUT OF STOCK"
 OCR_BOX_RE   = re.compile(r'^(.+?)\\s+(\\d+(?:\\.\\d+)?)\\s+BOX\\s*$', re.IGNORECASE)
 OCR_OOS_RE   = re.compile(r'^(.+?)\\s+OUT\\s+OF\\s+STOCK\\s*$', re.IGNORECASE)
 OCR_NOISE_RE = re.compile(r'^[^A-Za-z0-9]{0,2}$|^[\\W_]{3,}$')
@@ -210,11 +218,18 @@ def parse_ocr_pdf(doc):
         page = doc[page_num]
         if not page.get_images(full=True):
             continue
+        # OCR the full page for tile names / box counts
         mat = fitz.Matrix(3, 3)
         pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
         img = Image.frombytes('L', [pix.width, pix.height], pix.samples)
         text = pytesseract.image_to_string(img, config='--psm 4')
-        results.extend(parse_ocr_page(text))
+        page_tiles = parse_ocr_page(text)
+        # Extract embedded tile thumbnail images from the page
+        imgs = extract_page_images(page, doc)
+        for i, tile in enumerate(page_tiles):
+            if i < len(imgs):
+                tile['imageData'] = imgs[i]['b64']
+        results.extend(page_tiles)
     return results
 
 # ── entry point ──────────────────────────────────────────────────────────────
