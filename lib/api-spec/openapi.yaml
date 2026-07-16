@@ -3,20 +3,26 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Tiles Stock Management API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: depots
+    description: Depot management
+  - name: stock
+    description: Stock items
+  - name: uploads
+    description: PDF upload and processing
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +30,225 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /depots:
+    get:
+      operationId: listDepots
+      tags: [depots]
+      summary: List all depots
+      responses:
+        "200":
+          description: List of depots
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Depot"
+    post:
+      operationId: createDepot
+      tags: [depots]
+      summary: Create a new depot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DepotInput"
+      responses:
+        "201":
+          description: Created depot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Depot"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /depots/{id}:
+    get:
+      operationId: getDepot
+      tags: [depots]
+      summary: Get a depot by ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Depot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Depot"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /stock:
+    get:
+      operationId: listStock
+      tags: [stock]
+      summary: Search and list stock items
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+          description: Search by tile name, brand, or design
+        - name: depotId
+          in: query
+          schema:
+            type: ["integer", "null"]
+          description: Filter by depot ID
+        - name: brand
+          in: query
+          schema:
+            type: ["string", "null"]
+          description: Filter by brand name
+        - name: size
+          in: query
+          schema:
+            type: ["string", "null"]
+          description: Filter by tile size (e.g. 1200X600)
+        - name: finish
+          in: query
+          schema:
+            type: ["string", "null"]
+          description: Filter by finish (GLOSSY, MATT, etc.)
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Paginated stock items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockPage"
+
+  /stock/summary:
+    get:
+      operationId: getStockSummary
+      tags: [stock]
+      summary: Get stock summary grouped by depot
+      responses:
+        "200":
+          description: Stock summary per depot
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DepotSummary"
+
+  /stock/filters:
+    get:
+      operationId: getStockFilters
+      tags: [stock]
+      summary: Get available filter values (brands, sizes, finishes)
+      parameters:
+        - name: depotId
+          in: query
+          schema:
+            type: ["integer", "null"]
+      responses:
+        "200":
+          description: Available filter values
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StockFilters"
+
+  /uploads:
+    get:
+      operationId: listUploads
+      tags: [uploads]
+      summary: List recent PDF uploads
+      parameters:
+        - name: depotId
+          in: query
+          schema:
+            type: ["integer", "null"]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: List of uploads
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Upload"
+    post:
+      operationId: uploadPdf
+      tags: [uploads]
+      summary: Upload a PDF stock report for a depot
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              $ref: "#/components/schemas/UploadInput"
+      responses:
+        "201":
+          description: Upload created and processing started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Upload"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /uploads/{id}:
+    get:
+      operationId: getUpload
+      tags: [uploads]
+      summary: Get upload status and details
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Upload details
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Upload"
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +259,193 @@ components:
       required:
         - status
 
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    Depot:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        location:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+          format: date-time
+        lastUploadAt:
+          type: ["string", "null"]
+        itemCount:
+          type: integer
+      required:
+        - id
+        - name
+        - createdAt
+        - itemCount
+
+    DepotInput:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+        location:
+          type: string
+      required:
+        - name
+
+    StockItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        depotId:
+          type: integer
+        depotName:
+          type: string
+        tileName:
+          type: string
+        brand:
+          type: ["string", "null"]
+        size:
+          type: ["string", "null"]
+        design:
+          type: ["string", "null"]
+        finish:
+          type: ["string", "null"]
+        boxCount:
+          type: ["number", "null"]
+        pcsCount:
+          type: ["number", "null"]
+        stockDate:
+          type: ["string", "null"]
+          format: date
+        uploadId:
+          type: integer
+        updatedAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - depotId
+        - depotName
+        - tileName
+        - updatedAt
+        - uploadId
+
+    StockPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/StockItem"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+        totalPages:
+          type: integer
+      required:
+        - items
+        - total
+        - page
+        - limit
+        - totalPages
+
+    DepotSummary:
+      type: object
+      properties:
+        depotId:
+          type: integer
+        depotName:
+          type: string
+        totalItems:
+          type: integer
+        totalBoxes:
+          type: number
+        lastUploadAt:
+          type: ["string", "null"]
+          format: date-time
+        stockDate:
+          type: ["string", "null"]
+          format: date
+      required:
+        - depotId
+        - depotName
+        - totalItems
+        - totalBoxes
+
+    StockFilters:
+      type: object
+      properties:
+        brands:
+          type: array
+          items:
+            type: string
+        sizes:
+          type: array
+          items:
+            type: string
+        finishes:
+          type: array
+          items:
+            type: string
+      required:
+        - brands
+        - sizes
+        - finishes
+
+    Upload:
+      type: object
+      properties:
+        id:
+          type: integer
+        depotId:
+          type: integer
+        depotName:
+          type: string
+        filename:
+          type: string
+        status:
+          type: string
+          enum: [pending, processing, done, failed]
+        itemsExtracted:
+          type: ["integer", "null"]
+        errorMessage:
+          type: ["string", "null"]
+        stockDate:
+          type: ["string", "null"]
+          format: date
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: ["string", "null"]
+          format: date-time
+      required:
+        - id
+        - depotId
+        - depotName
+        - filename
+        - status
+        - createdAt
+
+    UploadInput:
+      type: object
+      properties:
+        depotId:
+          type: integer
+        stockDate:
+          type: string
+          format: date
+      required:
+        - depotId

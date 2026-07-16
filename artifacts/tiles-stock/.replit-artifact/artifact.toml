@@ -1,0 +1,27 @@
+kind = "web"
+previewPath = "/"
+title = "Tiles Stock Manager"
+version = "1.0.0"
+id = "artifacts/tiles-stock"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 19720
+
+[services.development]
+run = "pnpm --filter @workspace/tiles-stock run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/tiles-stock", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/tiles-stock/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19720"
+BASE_PATH = "/"
