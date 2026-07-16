@@ -2,7 +2,7 @@ import { Router } from "express";
 import multer from "multer";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { writeFile, unlink } from "fs/promises";
+import { writeFile, unlink, readFile } from "fs/promises";
 import { join } from "path";
 import { db } from "@workspace/db";
 import { uploadsTable, stockItemsTable, depotsTable } from "@workspace/db";
@@ -185,8 +185,10 @@ def parse_pdf(path):
 
 if __name__ == '__main__':
     path = sys.argv[1]
+    out_path = sys.argv[2]
     items = parse_pdf(path)
-    print(json.dumps(items))
+    with open(out_path, 'w') as f:
+        json.dump(items, f)
 `;
 
 async function parsePdf(pdfBuffer: Buffer): Promise<Array<{
@@ -201,18 +203,21 @@ async function parsePdf(pdfBuffer: Buffer): Promise<Array<{
   const tmpId = randomBytes(8).toString("hex");
   const pdfPath = join(tmpdir(), `upload_${tmpId}.pdf`);
   const scriptPath = join(tmpdir(), `parse_${tmpId}.py`);
+  const outPath = join(tmpdir(), `result_${tmpId}.json`);
 
   try {
     await Promise.all([
       writeFile(pdfPath, pdfBuffer),
       writeFile(scriptPath, PYTHON_SCRIPT),
     ]);
-    const { stdout } = await execAsync(`python3 "${scriptPath}" "${pdfPath}"`, { timeout: 120000 });
-    return JSON.parse(stdout.trim());
+    await execAsync(`python3 "${scriptPath}" "${pdfPath}" "${outPath}"`, { timeout: 120000 });
+    const raw = await readFile(outPath, "utf8");
+    return JSON.parse(raw);
   } finally {
     await Promise.all([
       unlink(pdfPath).catch(() => {}),
       unlink(scriptPath).catch(() => {}),
+      unlink(outPath).catch(() => {}),
     ]);
   }
 }
