@@ -35,9 +35,20 @@ import base64
 
 # ── brand list (longest-first for greedy matching) ───────────────────────────
 BRANDS = sorted([
-    'SHREEM','MOZILLA','MILLO','ROCO','AVALTA','TOSSA','BLUEGRESS','GEOGRESS',
-    'MONOLITH','ROCK','SOLO','NERISS','LORENZO','ALIVE','NEVADA','CRESTO',
-    'FORTUNE','NEXUS','OPULUX','KAG','KRESTO','LEMZON','LAVIT','ONE TOUCH',
+    # Stanza / SG depot brands
+    'SHREEM','MOZILLA','MILLO','ROCO','AVALTA','TOSSA','NERISS','LORENZO',
+    'ALIVE','SUZORA','BEETHAS','SPEROX','ANTONOVA','LIMONZA','LATTO','AARAV',
+    'SOLOGRIS','SOLOGRES','L-TILE','ONE TOUCH','SCIENTIFICA','VEGA','ORIK',
+    'SKYPE','IYOTA','GRENIC','FRENIS','MURANO','SUNRAJ','LACTOSE','SOLOSTONE',
+    'MARBILANO','STATUS','MILLENNIUM','LIVOLLA','MONOLITH','NOKEN','PARCOS',
+    'LV','ROTON','DIOR',
+    # Trusto / BizTiletech depot brands
+    'BLUEGRESS','GEOGRESS','ROCK','DONATO','CORAL','METRO','ROLLZA','ROLLANCE',
+    'ROLLSTAR','CEVIC','KAMRON','SANFORD','SOLOREX','ICOLUX','LAXVEER',
+    'ORIANA','ORINDA','PENGVIN','ROCART','VIZOLI','TORINO','CAVOS','FUSION',
+    'GRAYSTONE','EXOTICA','TAURUS','PASSION','CIBELA','KAG','SOLO',
+    # Legacy / generic brands
+    'NEVADA','CRESTO','FORTUNE','NEXUS','OPULUX','KRESTO','LEMZON','LAVIT',
     'BLUESTONE','NITCO','SOMANY','KAJARIA','JOHNSON','RAK','SIMPOLO',
     'SIMONZA','AXOR','VELBON','CASA','KIVOS','SPENTAGON','FRITA','MILLION',
     'LOREM','SUNFIELD','VARG','PASSERO','KSTONE','EVOK','GRACE','NOVENA',
@@ -45,9 +56,12 @@ BRANDS = sorted([
 ], key=len, reverse=True)
 
 DIMENSION_RE = re.compile(r'\\b(\\d{2,4})\\s*[Xx]\\s*(\\d{2,4})\\b')
+# Matches a line that IS ONLY a dimension -- bare size-column value, e.g. '1200x1800'
+PURE_DIM_RE  = re.compile(r'^[\\(\\[]?\\d{2,4}\\s*[Xx]\\s*\\d{2,4}[\\)\\]]?\\s*$')
 FINISH_RE    = re.compile(
     r'\\b(GLOSSY|MATT|MATTE|POLISHED|POSH|ENDLESS GLOSSY|ENDLESS|'
-    r'HI GLOSSY|SILK|CARVING|CRV|LAPATO|NANO|SATIN|NATURAL GLOSSY|SUGAR)\\b',
+    r'HI GLOSSY|HIGH GLOSSY|SILK|CARVING|CRV|LAPATO|NANO|SATIN|'
+    r'NATURAL GLOSSY|SUGAR|RUSTIC|FULLBODY|FULL BODY|COLOUR BODY)\\b',
     re.IGNORECASE
 )
 CATEGORY_RE  = re.compile(r'^(\\d{2,4}\\s*[Xx]\\s*\\d{2,4})\\s+(.+)$')
@@ -142,22 +156,60 @@ def get_tile_images(page, doc):
 BOX_NUM_RE = re.compile(r'^[\\d]+\\.?\\d*\\s*(BOX)?$', re.IGNORECASE)
 NIL_RE     = re.compile(r'^nil$', re.IGNORECASE)
 SKIP_PAT   = re.compile(
-    r'^(item\\s+name|name|box|pcs|design|stock\\s+list|epoxy|adhesive|topkrete|'
-    r'cp\\s+water|dispatched|despatch|plain\\s+colour)',
+    r'^(item\\s+name|item|name|box|pcs|design|stock\\s+list|stock\\s+summary|'
+    r'epoxy|adhesive|topkrete|cp\\s+water|miracle|sunflora|'
+    r'dispatched\\s+on|despatch|\\(despatch|\\(dispatch|dispatched|'
+    r's\\.n\\b|\\bimage\\b|quantity|product\\s+name|'
+    r'no\\s+pcs|booking|balance\\b|biztiletech|'
+    r'rate\\b|rs/sq|sqft|per\\s+box|'
+    r'plain\\s+colour|stock\\s+\\()',
     re.IGNORECASE
 )
+
+def parse_qty(text):
+    t = text.strip()
+    if NIL_RE.match(t):
+        return 0.0
+    if BOX_NUM_RE.match(t):
+        try:
+            return float(re.sub(r'[^\\d.]', '', t))
+        except Exception:
+            return 0.0
+    if re.search(r'\\bBOX\\b', t, re.IGNORECASE):
+        nums = re.findall(r'\\d+(?:\\.\\d+)?', t)
+        if nums:
+            return sum(float(n) for n in nums)
+    return None
 
 def parse_text_pdf(doc):
     results        = []
     current_size   = None
     current_finish = None
+
     for page_num in range(doc.page_count):
-        page = doc[page_num]
+        page       = doc[page_num]
         page_tiles = []
-        blocks     = sorted(page.get_text('blocks'), key=lambda b: (round(b[1]/40)*40, b[0]))
-        cur_name   = []
-        cur_box    = None
-        cur_pcs    = None
+
+        # Line-level extraction: get_text('dict') gives each visual line its own
+        # bbox so sorting at line level (not block level) interleaves left-column
+        # names with right-column quantities -- fixes SG + BizTiletech formats.
+        raw_lines = []
+        for blk in page.get_text('dict')['blocks']:
+            if blk.get('type') != 0:
+                continue
+            for ln in blk['lines']:
+                text = ' '.join(s['text'] for s in ln['spans']).strip()
+                text = re.sub(r'\\s+', ' ', text)
+                if text:
+                    raw_lines.append({'text': text,
+                                      'x': ln['bbox'][0],
+                                      'y': ln['bbox'][1]})
+
+        raw_lines.sort(key=lambda l: (round(l['y'] / 6) * 6, l['x']))
+
+        cur_name = []
+        cur_box  = None
+        cur_pcs  = None
 
         def flush():
             nonlocal cur_name, cur_box, cur_pcs
@@ -169,51 +221,62 @@ def parse_text_pdf(doc):
                         current_size=current_size, current_finish=current_finish
                     ))
             cur_name.clear()
-            cur_box = cur_pcs = None   # noqa: F841 – reassigned by outer scope
+            cur_box = cur_pcs = None
 
-        for b in blocks:
-            for line in b[4].split('\\n'):
-                line = line.strip()
-                if not line or SKIP_PAT.match(line):
-                    continue
-                if re.match(r'^[\\(\\)\\[\\]\\-=]+$', line):
-                    continue
+        for item in raw_lines:
+            line = item['text']
+            if not line or SKIP_PAT.match(line):
+                continue
+            if re.match(r'^[\\(\\)\\[\\]\\-=|]+$', line):
+                continue
+            if re.match(r'^\\(\\s*[^)]{1,25}\\s*\\)$', line) and not DIMENSION_RE.search(line):
+                continue
 
-                # Category header
-                cat_m = CATEGORY_RE.match(line)
-                if cat_m:
-                    flush()
-                    dim = re.sub(r'\\s', '', cat_m.group(1)).upper().replace('x','X')
+            cat_m = CATEGORY_RE.match(line)
+            if cat_m:
+                flush()
+                dim = re.sub(r'\\s', '', cat_m.group(1)).upper().replace('x', 'X')
+                current_size = dim
+                fm = FINISH_RE.search(cat_m.group(2))
+                if fm:
+                    current_finish = fm.group(0).upper()
+                continue
+
+            if PURE_DIM_RE.match(line):
+                dim = re.sub(r'[^\\dXx]', '', line).upper().replace('x', 'X')
+                if cur_name and cur_box is None:
                     current_size = dim
-                    fm = FINISH_RE.search(cat_m.group(2))
-                    if fm:
-                        current_finish = fm.group(0).upper()
-                    continue
-
-                if NIL_RE.match(line):
-                    if cur_name:
-                        if cur_box is None:   cur_box = 0.0
-                        elif cur_pcs is None: cur_pcs = 0.0
-                elif BOX_NUM_RE.match(line) and not DIMENSION_RE.search(line):
-                    try:    num = float(re.sub(r'[^\\d.]', '', line))
-                    except: num = 0.0
-                    if cur_name:
-                        if cur_box is None:   cur_box = num
-                        elif cur_pcs is None: cur_pcs = num
-                elif DIMENSION_RE.search(line) or starts_with_brand(line):
-                    flush()
-                    cur_name = [line]
-                    cur_box = cur_pcs = None
                 else:
-                    if cur_name and len(line) > 2 and not re.match(r'^\\d+$', line):
-                        cur_name.append(line)
+                    flush()
+                    current_size = dim
+                continue
+
+            qty = parse_qty(line)
+            if qty is not None and not DIMENSION_RE.search(line):
+                if cur_name:
+                    if cur_box is None:
+                        cur_box = qty
+                    elif cur_pcs is None:
+                        cur_pcs = qty
+                continue
+
+            if DIMENSION_RE.search(line) or starts_with_brand(line):
+                flush()
+                cur_name = [line]
+                cur_box = cur_pcs = None
+                continue
+
+            if cur_name and len(line) > 2 and not re.match(r'^\\d+$', line):
+                cur_name.append(line)
 
         flush()
+
         imgs = get_tile_images(page, doc)
         for i, tile in enumerate(page_tiles):
             if i < len(imgs):
                 tile['imageData'] = imgs[i]['b64']
         results.extend(page_tiles)
+
     return results
 
 # ── OCR-based parser (fully scanned / image-only PDFs) ───────────────────────
