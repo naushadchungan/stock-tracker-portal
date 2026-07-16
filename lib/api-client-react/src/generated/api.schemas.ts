@@ -108,6 +108,7 @@ export interface Upload {
 export interface UploadInput {
   depotId: number;
   stockDate?: string;
+  file: Blob;
 }
 
 export type ListStockParams = {

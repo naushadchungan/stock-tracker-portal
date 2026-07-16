@@ -447,5 +447,9 @@ components:
         stockDate:
           type: string
           format: date
+        file:
+          type: string
+          format: binary
       required:
         - depotId
+        - file

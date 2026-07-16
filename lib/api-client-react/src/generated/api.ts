@@ -709,6 +709,7 @@ formData.append(`depotId`, uploadInput.depotId.toString())
 if(uploadInput.stockDate !== undefined) {
  formData.append(`stockDate`, uploadInput.stockDate);
  }
+formData.append(`file`, uploadInput.file);
 
   return customFetch<Upload>(getUploadPdfUrl(),
   {

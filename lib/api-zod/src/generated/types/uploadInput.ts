@@ -9,4 +9,5 @@
 export interface UploadInput {
   depotId: number;
   stockDate?: Date;
+  file: Blob;
 }

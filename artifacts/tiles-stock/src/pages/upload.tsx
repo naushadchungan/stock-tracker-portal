@@ -28,6 +28,7 @@ import {
   useUploadPdf,
   useListUploads,
   useGetUpload,
+  getGetUploadQueryKey,
   getListUploadsQueryKey,
   getListStockQueryKey,
   getGetStockSummaryQueryKey,
@@ -54,10 +55,10 @@ export default function UploadReport() {
   // Polling query
   const { data: uploadStatus } = useGetUpload(activeUploadId as number, {
     query: {
+      queryKey: getGetUploadQueryKey(activeUploadId as number),
       enabled: !!activeUploadId,
-      refetchInterval: (data) => {
-        // Safe access ignoring strict types since the return type is directly Upload in Orval
-        const status = (data as unknown as Upload)?.status;
+      refetchInterval: (query) => {
+        const status = (query.state.data as Upload | undefined)?.status;
         return status === 'processing' || status === 'pending' ? 2000 : false;
       }
     }
@@ -128,16 +129,13 @@ export default function UploadReport() {
     }
 
     try {
-      const formData = new FormData()
-      formData.append("depotId", depotId)
-      if (stockDate) {
-        formData.append("stockDate", stockDate)
-      }
-      formData.append("file", file)
-
-      // Use any to bypass strict type checking on the generated mutation 
-      // since it expects a specific input type but the interceptor converts formData correctly
-      const result = await uploadMutation.mutateAsync({ data: formData as any })
+      const result = await uploadMutation.mutateAsync({
+        data: {
+          depotId: parseInt(depotId, 10),
+          stockDate: stockDate || undefined,
+          file,
+        }
+      })
       
       setActiveUploadId(result.id)
       toast.info("Upload started, processing PDF...")

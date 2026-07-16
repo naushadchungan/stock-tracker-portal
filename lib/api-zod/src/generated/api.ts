@@ -165,7 +165,8 @@ export const ListUploadsResponse = zod.array(ListUploadsResponseItem)
  */
 export const UploadPdfBody = zod.object({
   "depotId": zod.number(),
-  "stockDate": zod.coerce.date().optional()
+  "stockDate": zod.coerce.date().optional(),
+  "file": zod.instanceof(File)
 })
 
 export const UploadPdfResponse = zod.object({
