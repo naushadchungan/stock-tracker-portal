@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
+import { InstallPrompt } from '@/components/install-prompt';
 import NotFound from '@/pages/not-found';
 import { Route, Switch, Router as WouterRouter } from 'wouter';
 import { Layout } from '@/components/layout';
@@ -63,6 +64,7 @@ function App() {
         </AuthProvider>
       </WouterRouter>
       <Toaster position="top-right" richColors />
+      <InstallPrompt />
     </QueryClientProvider>
   );
 }
