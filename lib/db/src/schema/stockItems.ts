@@ -17,6 +17,7 @@ export const stockItemsTable = pgTable("stock_items", {
   pcsCount: numeric("pcs_count", { precision: 10, scale: 2 }),
   stockDate: date("stock_date"),
   imageData: text("image_data"),
+  location: text("location"),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 }, (table) => [
   index("stock_depot_idx").on(table.depotId),

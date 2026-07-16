@@ -43,6 +43,7 @@ router.get("/", async (req, res) => {
           stockDate: stockItemsTable.stockDate,
           uploadId: stockItemsTable.uploadId,
           updatedAt: stockItemsTable.updatedAt,
+          location: stockItemsTable.location,
           hasImage: sql<boolean>`${stockItemsTable.imageData} IS NOT NULL`.as("has_image"),
         })
         .from(stockItemsTable)

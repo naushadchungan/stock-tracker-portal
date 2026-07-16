@@ -33,87 +33,109 @@ import sys
 import re
 import base64
 
-# ── shared helpers ──────────────────────────────────────────────────────────
-DIMENSION_RE = re.compile(r'\\b\\d+\\s*[Xx]\\s*\\d+\\b')
-FINISH_RE    = re.compile(r'\\b(GLOSSY|MATT|POSH|ENDLESS GLOSSY|ENDLESS|HI GLOSSY|SILK|CARVING|CRV)\\b', re.IGNORECASE)
-BRANDS = [
+# ── brand list (longest-first for greedy matching) ───────────────────────────
+BRANDS = sorted([
     'SHREEM','MOZILLA','MILLO','ROCO','AVALTA','TOSSA','BLUEGRESS','GEOGRESS',
     'MONOLITH','ROCK','SOLO','NERISS','LORENZO','ALIVE','NEVADA','CRESTO',
     'FORTUNE','NEXUS','OPULUX','KAG','KRESTO','LEMZON','LAVIT','ONE TOUCH',
     'BLUESTONE','NITCO','SOMANY','KAJARIA','JOHNSON','RAK','SIMPOLO',
-]
+    'SIMONZA','AXOR','VELBON','CASA','KIVOS','SPENTAGON','FRITA','MILLION',
+    'LOREM','SUNFIELD','VARG','PASSERO','KSTONE','EVOK','GRACE','NOVENA',
+    'CASAGRES','EUROTILE','ROYALE','ATLAS',
+], key=len, reverse=True)
+
+DIMENSION_RE = re.compile(r'\\b(\\d{2,4})\\s*[Xx]\\s*(\\d{2,4})\\b')
+FINISH_RE    = re.compile(
+    r'\\b(GLOSSY|MATT|MATTE|POLISHED|POSH|ENDLESS GLOSSY|ENDLESS|'
+    r'HI GLOSSY|SILK|CARVING|CRV|LAPATO|NANO|SATIN|NATURAL GLOSSY|SUGAR)\\b',
+    re.IGNORECASE
+)
+CATEGORY_RE  = re.compile(r'^(\\d{2,4}\\s*[Xx]\\s*\\d{2,4})\\s+(.+)$')
+TILE_BOX_RE  = re.compile(r'^(.+?)\\s+(\\d+(?:\\.\\d+)?)\\s+BOX\\b', re.IGNORECASE)
+TILE_OOS_RE  = re.compile(r'^(.+?)\\s+OUT\\s+OF\\s+STOCK\\b', re.IGNORECASE)
+LOCATION_RE  = re.compile(r'\\b(RACK|SHELF|ROW|SECTION|AISLE)\\s*[:\\-]?\\s*([A-Z0-9\\-]+)', re.IGNORECASE)
 
 def extract_brand(name):
     up = name.upper()
     for b in BRANDS:
-        if b in up:
+        if re.search(r'\\b' + re.escape(b) + r'\\b', up):
             return b
     return None
 
-def extract_size(name):
+def extract_size_from_name(name, fallback=None):
     m = DIMENSION_RE.search(name)
-    return m.group(0).replace(' ','').upper() if m else None
+    if m:
+        return (m.group(1) + 'X' + m.group(2)).upper()
+    return fallback
 
-def extract_finish(name):
+def extract_finish_from_name(name, fallback=None):
     m = FINISH_RE.search(name)
-    return m.group(0).upper() if m else None
+    if m:
+        return re.sub(r'\\s+', ' ', m.group(0)).upper()
+    return fallback
 
-def make_tile(name, box_count, pcs_count=None, image_data=None):
-    name = re.sub(r'\\s+', ' ', name).strip()
+def make_tile(name, box_count, pcs_count=None, image_data=None,
+              current_size=None, current_finish=None, location=None):
+    name   = re.sub(r'\\s+', ' ', name).strip()
+    size   = extract_size_from_name(name) or current_size
+    finish = extract_finish_from_name(name) or current_finish
     return {
-        'tileName': name,
-        'brand': extract_brand(name),
-        'size': extract_size(name),
-        'finish': extract_finish(name),
-        'boxCount': box_count,
-        'pcsCount': pcs_count,
+        'tileName':  name,
+        'brand':     extract_brand(name),
+        'size':      size,
+        'finish':    finish,
+        'boxCount':  box_count,
+        'pcsCount':  pcs_count,
         'imageData': image_data,
+        'location':  location,
     }
 
-# ── PDF type detection ───────────────────────────────────────────────────────
-def has_text(doc):
-    for i in range(min(5, doc.page_count)):
-        if doc[i].get_text('text').strip():
+def starts_with_brand(line):
+    up = line.upper()
+    for b in BRANDS:
+        if up.startswith(b + ' ') or up.startswith(b + '-') or up == b:
             return True
     return False
 
-# ── image extraction (shared by both parsers) ────────────────────────────────
-# min_w/min_h: skip tiny decoration; max_w/max_h: skip full-page scans & logos
-def extract_page_images(page, doc, min_w=80, min_h=60, max_w=380, max_h=380):
+# ── PDF type detection ───────────────────────────────────────────────────────
+def has_text(doc):
+    chars = 0
+    for i in range(min(5, doc.page_count)):
+        chars += len(doc[i].get_text('text').strip())
+    return chars > 50
+
+# ── tile photo extraction ────────────────────────────────────────────────────
+def get_tile_images(page, doc):
     images = []
-    try:
-        seen = set()
-        for info in page.get_images(full=True):
-            xref = info[0]
-            if xref in seen:
+    seen   = set()
+    page_w = page.rect.width
+    for info in page.get_images(full=True):
+        xref = info[0]
+        if xref in seen:
+            continue
+        seen.add(xref)
+        try:
+            rects = page.get_image_rects(xref)
+            if not rects:
                 continue
-            seen.add(xref)
-            try:
-                rects = page.get_image_rects(xref)
-                if not rects:
-                    continue
-                rect = rects[0]
-                w, h = rect.width, rect.height
-                if w < min_w or h < min_h:
-                    continue
-                if w > max_w or h > max_h:
-                    continue
-                img_dict = doc.extract_image(xref)
-                if not img_dict or not img_dict.get('image'):
-                    continue
-                raw = img_dict['image']
-                if len(raw) > 600000:
-                    continue
-                images.append({
-                    'b64': base64.b64encode(raw).decode('utf-8'),
-                    'y': rect.y0,
-                    'x': rect.x0,
-                })
-            except Exception:
-                pass
-    except Exception:
-        pass
-    images.sort(key=lambda i: (round(i['y'] / 150) * 150, i['x']))
+            r = rects[0]
+            w, h = r.width, r.height
+            if w < 60 or h < 40:
+                continue   # too small
+            if w > 300 or h > 300:
+                continue   # full-page scan / logo
+            if r.x0 < page_w * 0.45:
+                continue   # skip text-area images
+            img_dict = doc.extract_image(xref)
+            if not img_dict or not img_dict.get('image'):
+                continue
+            raw = img_dict['image']
+            if len(raw) > 700000:
+                continue
+            images.append({'b64': base64.b64encode(raw).decode('utf-8'), 'y': r.y0})
+        except Exception:
+            pass
+    images.sort(key=lambda i: i['y'])
     return images
 
 # ── text-based parser ────────────────────────────────────────────────────────
@@ -121,51 +143,64 @@ BOX_NUM_RE = re.compile(r'^[\\d]+\\.?\\d*\\s*(BOX)?$', re.IGNORECASE)
 NIL_RE     = re.compile(r'^nil$', re.IGNORECASE)
 SKIP_PAT   = re.compile(
     r'^(item\\s+name|name|box|pcs|design|stock\\s+list|epoxy|adhesive|topkrete|'
-    r'cp\\s+water|millennium|dispatched|despatch|plain\\s+colour)',
+    r'cp\\s+water|dispatched|despatch|plain\\s+colour)',
     re.IGNORECASE
 )
-TRIVIAL_CATS = {
-    '1200X600 GLOSSY','1200X600 MATT','600X1200 GLOSSY','800X2400','1600X800',
-    '600X600','1800X1200','800X800','600X600 GLOSSY','600X600 MATT',
-    '1800X1200 GLOSSY','1600X800 GLOSSY','1600X800 MATT'
-}
 
 def parse_text_pdf(doc):
-    results = []
+    results        = []
+    current_size   = None
+    current_finish = None
     for page_num in range(doc.page_count):
         page = doc[page_num]
         page_tiles = []
-        blocks = sorted(page.get_text('blocks'), key=lambda b: (round(b[1]/40)*40, b[0]))
-        cur_name = []
-        cur_box  = None
-        cur_pcs  = None
+        blocks     = sorted(page.get_text('blocks'), key=lambda b: (round(b[1]/40)*40, b[0]))
+        cur_name   = []
+        cur_box    = None
+        cur_pcs    = None
 
         def flush():
             nonlocal cur_name, cur_box, cur_pcs
             if cur_name and cur_box is not None:
                 name = ' '.join(cur_name)
-                if len(name) > 5 and DIMENSION_RE.search(name):
-                    page_tiles.append(make_tile(name, cur_box, cur_pcs))
-            cur_name, cur_box, cur_pcs = [], None, None
+                if len(name) > 3:
+                    page_tiles.append(make_tile(
+                        name, cur_box, cur_pcs,
+                        current_size=current_size, current_finish=current_finish
+                    ))
+            cur_name.clear()
+            cur_box = cur_pcs = None   # noqa: F841 – reassigned by outer scope
 
         for b in blocks:
             for line in b[4].split('\\n'):
                 line = line.strip()
-                if not line or SKIP_PAT.match(line) or line.upper() in TRIVIAL_CATS:
+                if not line or SKIP_PAT.match(line):
                     continue
-                if re.match(r'^[\\(\\)\\[\\]]+$', line):
+                if re.match(r'^[\\(\\)\\[\\]\\-=]+$', line):
                     continue
+
+                # Category header
+                cat_m = CATEGORY_RE.match(line)
+                if cat_m:
+                    flush()
+                    dim = re.sub(r'\\s', '', cat_m.group(1)).upper().replace('x','X')
+                    current_size = dim
+                    fm = FINISH_RE.search(cat_m.group(2))
+                    if fm:
+                        current_finish = fm.group(0).upper()
+                    continue
+
                 if NIL_RE.match(line):
                     if cur_name:
-                        if cur_box is None: cur_box = 0.0
+                        if cur_box is None:   cur_box = 0.0
                         elif cur_pcs is None: cur_pcs = 0.0
                 elif BOX_NUM_RE.match(line) and not DIMENSION_RE.search(line):
-                    try: num = float(re.sub(r'[^\\d.]', '', line))
+                    try:    num = float(re.sub(r'[^\\d.]', '', line))
                     except: num = 0.0
                     if cur_name:
-                        if cur_box is None: cur_box = num
+                        if cur_box is None:   cur_box = num
                         elif cur_pcs is None: cur_pcs = num
-                elif DIMENSION_RE.search(line):
+                elif DIMENSION_RE.search(line) or starts_with_brand(line):
                     flush()
                     cur_name = [line]
                     cur_box = cur_pcs = None
@@ -174,72 +209,113 @@ def parse_text_pdf(doc):
                         cur_name.append(line)
 
         flush()
-        imgs = extract_page_images(page, doc)
+        imgs = get_tile_images(page, doc)
         for i, tile in enumerate(page_tiles):
             if i < len(imgs):
                 tile['imageData'] = imgs[i]['b64']
         results.extend(page_tiles)
     return results
 
-# ── OCR-based parser (image/scanned PDFs) ────────────────────────────────────
-OCR_BOX_RE   = re.compile(r'^(.+?)\\s+(\\d+(?:\\.\\d+)?)\\s+BOX\\s*$', re.IGNORECASE)
-OCR_OOS_RE   = re.compile(r'^(.+?)\\s+OUT\\s+OF\\s+STOCK\\s*$', re.IGNORECASE)
-OCR_NOISE_RE = re.compile(r'^[^A-Za-z0-9]{0,2}$|^[\\W_]{3,}$')
-
-def parse_ocr_page(text):
-    tiles = []
-    for raw_line in text.splitlines():
-        line = raw_line.strip()
-        if not line or OCR_NOISE_RE.match(line):
-            continue
-        line = re.sub(r'^[^A-Z0-9]+', '', line, flags=re.IGNORECASE).strip()
-        if not line:
-            continue
-        m = OCR_BOX_RE.match(line)
-        if m:
-            name, count = m.group(1).strip(), float(m.group(2))
-            if len(name) >= 3:
-                tiles.append(make_tile(name, count))
-            continue
-        m = OCR_OOS_RE.match(line)
-        if m:
-            name = m.group(1).strip()
-            if len(name) >= 3:
-                tiles.append(make_tile(name, 0.0))
-    return tiles
-
+# ── OCR-based parser (fully scanned / image-only PDFs) ───────────────────────
 def parse_ocr_pdf(doc):
     try:
         import pytesseract
         from PIL import Image
     except ImportError:
         return []
-    results = []
+
+    results        = []
+    current_size   = None
+    current_finish = None
+
     for page_num in range(doc.page_count):
         page = doc[page_num]
-        if not page.get_images(full=True):
-            continue
-        # OCR the full page for tile names / box counts
-        mat = fitz.Matrix(3, 3)
-        pix = page.get_pixmap(matrix=mat, colorspace=fitz.csGRAY)
-        img = Image.frombytes('L', [pix.width, pix.height], pix.samples)
+
+        # OCR only the left 60 % of the page — avoids noise from tile photos
+        page_rect = page.rect
+        clip = fitz.Rect(0, 0, page_rect.width * 0.60, page_rect.height)
+        mat  = fitz.Matrix(3, 3)
+        pix  = page.get_pixmap(matrix=mat, clip=clip, colorspace=fitz.csGRAY)
+        img  = Image.frombytes('L', [pix.width, pix.height], pix.samples)
         text = pytesseract.image_to_string(img, config='--psm 4')
-        page_tiles = parse_ocr_page(text)
-        # Extract embedded tile thumbnail images from the page
-        imgs = extract_page_images(page, doc)
+
+        tile_imgs  = get_tile_images(page, doc)
+        page_tiles = []
+
+        for raw_line in text.splitlines():
+            line = re.sub(r'\\s+', ' ', raw_line).strip()
+            if not line:
+                continue
+
+            # Filter obvious OCR noise
+            alpha_ratio = sum(1 for c in line if c.isalpha()) / max(len(line), 1)
+            if alpha_ratio < 0.35 and len(line) < 25:
+                continue
+            if re.match(r'^[^A-Za-z0-9]{0,3}$', line):
+                continue
+
+            # ── category header ───────────────────────────────────────────────
+            cat_m = CATEGORY_RE.match(line)
+            if cat_m:
+                dim = re.sub(r'\\s', '', cat_m.group(1)).upper().replace('x','X')
+                current_size = dim
+                fm = FINISH_RE.search(cat_m.group(2))
+                if fm:
+                    current_finish = re.sub(r'\\s+', ' ', fm.group(0)).upper()
+                continue
+
+            # Optional location annotation in line
+            location = None
+            loc_m = LOCATION_RE.search(line)
+            if loc_m:
+                location = loc_m.group(0).strip()
+
+            # ── tile with box count ───────────────────────────────────────────
+            m = TILE_BOX_RE.match(line)
+            if m:
+                name  = re.sub(r'\\s+', ' ', m.group(1)).strip()
+                count = float(m.group(2))
+                if len(name) >= 3 and starts_with_brand(name):
+                    page_tiles.append(make_tile(
+                        name, count,
+                        current_size=current_size, current_finish=current_finish,
+                        location=location,
+                    ))
+                continue
+
+            # ── out of stock ──────────────────────────────────────────────────
+            m = TILE_OOS_RE.match(line)
+            if m:
+                name = re.sub(r'\\s+', ' ', m.group(1)).strip()
+                if len(name) >= 3 and starts_with_brand(name):
+                    page_tiles.append(make_tile(
+                        name, 0.0,
+                        current_size=current_size, current_finish=current_finish,
+                        location=location,
+                    ))
+                continue
+
+            # ── brand line with no count (display / uncounted category tiles) ─
+            if starts_with_brand(line) and alpha_ratio >= 0.50 and len(line) >= 5:
+                page_tiles.append(make_tile(
+                    line, None,
+                    current_size=current_size, current_finish=current_finish,
+                    location=location,
+                ))
+
+        # Match tile photos to tiles by index (both sorted top-to-bottom)
         for i, tile in enumerate(page_tiles):
-            if i < len(imgs):
-                tile['imageData'] = imgs[i]['b64']
+            if i < len(tile_imgs):
+                tile['imageData'] = tile_imgs[i]['b64']
+
         results.extend(page_tiles)
+
     return results
 
 # ── entry point ──────────────────────────────────────────────────────────────
 def parse_pdf(path):
-    doc = fitz.open(path)
-    if has_text(doc):
-        items = parse_text_pdf(doc)
-    else:
-        items = parse_ocr_pdf(doc)
+    doc   = fitz.open(path)
+    items = parse_text_pdf(doc) if has_text(doc) else parse_ocr_pdf(doc)
     doc.close()
     return items
 
@@ -259,11 +335,12 @@ async function parsePdf(pdfBuffer: Buffer): Promise<Array<{
   boxCount: number | null;
   pcsCount: number | null;
   imageData: string | null;
+  location: string | null;
 }>> {
-  const tmpId = randomBytes(8).toString("hex");
-  const pdfPath = join(tmpdir(), `upload_${tmpId}.pdf`);
+  const tmpId     = randomBytes(8).toString("hex");
+  const pdfPath   = join(tmpdir(), `upload_${tmpId}.pdf`);
   const scriptPath = join(tmpdir(), `parse_${tmpId}.py`);
-  const outPath = join(tmpdir(), `result_${tmpId}.json`);
+  const outPath   = join(tmpdir(), `result_${tmpId}.json`);
 
   try {
     await Promise.all([
@@ -286,20 +363,20 @@ async function parsePdf(pdfBuffer: Buffer): Promise<Array<{
 router.get("/", async (req, res) => {
   try {
     const depotId = req.query.depotId ? parseInt(req.query.depotId as string, 10) : null;
-    const limit = Math.min(100, parseInt((req.query.limit as string) || "20", 10));
+    const limit   = Math.min(100, parseInt((req.query.limit as string) || "20", 10));
 
     const rows = await db
       .select({
-        id: uploadsTable.id,
-        depotId: uploadsTable.depotId,
-        depotName: depotsTable.name,
-        filename: uploadsTable.filename,
-        status: uploadsTable.status,
+        id:             uploadsTable.id,
+        depotId:        uploadsTable.depotId,
+        depotName:      depotsTable.name,
+        filename:       uploadsTable.filename,
+        status:         uploadsTable.status,
         itemsExtracted: uploadsTable.itemsExtracted,
-        errorMessage: uploadsTable.errorMessage,
-        stockDate: uploadsTable.stockDate,
-        createdAt: uploadsTable.createdAt,
-        completedAt: uploadsTable.completedAt,
+        errorMessage:   uploadsTable.errorMessage,
+        stockDate:      uploadsTable.stockDate,
+        createdAt:      uploadsTable.createdAt,
+        completedAt:    uploadsTable.completedAt,
       })
       .from(uploadsTable)
       .innerJoin(depotsTable, eq(depotsTable.id, uploadsTable.depotId))
@@ -340,8 +417,8 @@ router.post("/", requireAdmin, upload.single("file"), async (req, res) => {
   res.status(201).json({ ...uploadRecord, depotName: depot.name });
 
   const fileBuffer = req.file.buffer;
-  const uploadId = uploadRecord.id;
-  const log = req.log;
+  const uploadId   = uploadRecord.id;
+  const log        = req.log;
 
   void (async () => {
     try {
@@ -360,14 +437,15 @@ router.post("/", requireAdmin, upload.single("file"), async (req, res) => {
       const toInsert = items.map((item) => ({
         depotId,
         uploadId,
-        tileName: item.tileName,
-        brand: item.brand,
-        size: item.size,
-        finish: item.finish,
-        boxCount: item.boxCount !== null ? String(item.boxCount) : null,
-        pcsCount: item.pcsCount !== null ? String(item.pcsCount) : null,
+        tileName:  item.tileName,
+        brand:     item.brand,
+        size:      item.size,
+        finish:    item.finish,
+        boxCount:  item.boxCount !== null ? String(item.boxCount) : null,
+        pcsCount:  item.pcsCount !== null ? String(item.pcsCount) : null,
         stockDate,
-        imageData: item.imageData,
+        imageData: item.imageData ?? null,
+        location:  item.location ?? null,
       }));
 
       for (let i = 0; i < toInsert.length; i += 100) {
@@ -396,16 +474,16 @@ router.get("/:id", async (req, res) => {
 
     const [row] = await db
       .select({
-        id: uploadsTable.id,
-        depotId: uploadsTable.depotId,
-        depotName: depotsTable.name,
-        filename: uploadsTable.filename,
-        status: uploadsTable.status,
+        id:             uploadsTable.id,
+        depotId:        uploadsTable.depotId,
+        depotName:      depotsTable.name,
+        filename:       uploadsTable.filename,
+        status:         uploadsTable.status,
         itemsExtracted: uploadsTable.itemsExtracted,
-        errorMessage: uploadsTable.errorMessage,
-        stockDate: uploadsTable.stockDate,
-        createdAt: uploadsTable.createdAt,
-        completedAt: uploadsTable.completedAt,
+        errorMessage:   uploadsTable.errorMessage,
+        stockDate:      uploadsTable.stockDate,
+        createdAt:      uploadsTable.createdAt,
+        completedAt:    uploadsTable.completedAt,
       })
       .from(uploadsTable)
       .innerJoin(depotsTable, eq(depotsTable.id, uploadsTable.depotId))

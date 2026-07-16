@@ -51,6 +51,8 @@ export interface StockItem {
   stockDate?: string | null;
   uploadId: number;
   updatedAt: string;
+  /** @nullable */
+  location?: string | null;
   hasImage: boolean;
 }
 

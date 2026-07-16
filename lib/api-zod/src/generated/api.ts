@@ -268,6 +268,7 @@ export const ListStockResponse = zod.object({
   "stockDate": zod.coerce.date().nullish(),
   "uploadId": zod.number(),
   "updatedAt": zod.coerce.date(),
+  "location": zod.string().nullish(),
   "hasImage": zod.boolean()
 })),
   "total": zod.number(),

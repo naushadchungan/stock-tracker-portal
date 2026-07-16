@@ -559,6 +559,8 @@ components:
         updatedAt:
           type: string
           format: date-time
+        location:
+          type: ["string", "null"]
         hasImage:
           type: boolean
       required:
