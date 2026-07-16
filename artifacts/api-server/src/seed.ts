@@ -16,7 +16,7 @@ export async function seedAdmin() {
 
     if (existing) return;
 
-    const passwordHash = await bcrypt.hash("admin@1z2*", 12);
+    const passwordHash = await bcrypt.hash("Admin@1z2*", 12);
     await db.insert(usersTable).values({
       username: "admin",
       passwordHash,
