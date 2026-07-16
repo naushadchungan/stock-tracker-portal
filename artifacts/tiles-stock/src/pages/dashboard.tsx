@@ -3,9 +3,7 @@ import { Link } from "wouter"
 import { 
   Building2, 
   Package, 
-  Boxes, 
   ArrowRight,
-  TrendingUp,
   Clock
 } from "lucide-react"
 
@@ -23,10 +21,8 @@ export default function Dashboard() {
 
   const isLoading = isLoadingDepots || isLoadingSummary
 
-  // Calculate quick stats
   const totalDepots = depots?.length || 0
   const totalUniqueTiles = summary?.reduce((acc, curr) => acc + curr.totalItems, 0) || 0
-  const totalBoxes = summary?.reduce((acc, curr) => acc + curr.totalBoxes, 0) || 0
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -38,7 +34,7 @@ export default function Dashboard() {
       </div>
 
       {/* Quick Stats */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2">
         <Card className="border-l-4 border-l-primary">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium">Total Depots</CardTitle>
@@ -55,7 +51,7 @@ export default function Dashboard() {
         
         <Card className="border-l-4 border-l-blue-600">
           <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Total Unique Tiles</CardTitle>
+            <CardTitle className="text-sm font-medium">Total Tile Items</CardTitle>
             <Package className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
@@ -63,20 +59,6 @@ export default function Dashboard() {
               <Skeleton className="h-8 w-20" />
             ) : (
               <div className="text-3xl font-bold">{totalUniqueTiles.toLocaleString()}</div>
-            )}
-          </CardContent>
-        </Card>
-        
-        <Card className="border-l-4 border-l-emerald-600">
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium">Total Boxes in Stock</CardTitle>
-            <Boxes className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            {isLoading ? (
-              <Skeleton className="h-8 w-20" />
-            ) : (
-              <div className="text-3xl font-bold">{totalBoxes.toLocaleString()}</div>
             )}
           </CardContent>
         </Card>
@@ -140,15 +122,9 @@ export default function Dashboard() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="flex-1 pb-4">
-                    <div className="grid grid-cols-2 gap-4 mt-2 mb-6">
-                      <div>
-                        <div className="text-xs text-muted-foreground uppercase font-semibold tracking-wider mb-1">Unique Items</div>
-                        <div className="text-2xl font-bold text-foreground">{depotSum.totalItems.toLocaleString()}</div>
-                      </div>
-                      <div>
-                        <div className="text-xs text-muted-foreground uppercase font-semibold tracking-wider mb-1">Total Boxes</div>
-                        <div className="text-2xl font-bold text-foreground">{depotSum.totalBoxes.toLocaleString()}</div>
-                      </div>
+                    <div className="mt-2 mb-6">
+                      <div className="text-xs text-muted-foreground uppercase font-semibold tracking-wider mb-1">Tile Items</div>
+                      <div className="text-2xl font-bold text-foreground">{depotSum.totalItems.toLocaleString()}</div>
                     </div>
                     
                     <div className="mt-auto">

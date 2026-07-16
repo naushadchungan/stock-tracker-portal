@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "codegen": "orval --config ./orval.config.ts && pnpm -w run typecheck:libs"
+    "codegen": "orval --config ./orval.config.ts && node -e \"const p=require('path'),fs=require('fs'),r=__dirname;fs.writeFileSync(p.resolve(r,'../../lib/api-zod/src/index.ts'),'export * from \\\"./generated/api\\\";\\n');fs.writeFileSync(p.resolve(r,'../../lib/api-client-react/src/index.ts'),'export * from \\\"./generated/api\\\";\\nexport * from \\\"./generated/api.schemas\\\";\\nexport { setBaseUrl, setAuthTokenGetter } from \\\"./custom-fetch\\\";\\nexport type { AuthTokenGetter } from \\\"./custom-fetch\\\";\\n')\" && pnpm -w run typecheck:libs"
   },
   "devDependencies": {
     "orval": "^8.21.0"

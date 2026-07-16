@@ -69,6 +69,38 @@ export const GetDepotResponse = zod.object({
 
 
 /**
+ * @summary Update a depot name or location
+ */
+export const UpdateDepotParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const UpdateDepotBody = zod.object({
+  "name": zod.string().optional(),
+  "location": zod.string().nullish()
+})
+
+export const UpdateDepotResponse = zod.object({
+  "id": zod.number(),
+  "name": zod.string(),
+  "location": zod.string().nullish(),
+  "createdAt": zod.coerce.date(),
+  "lastUploadAt": zod.string().nullish(),
+  "itemCount": zod.number()
+})
+
+
+/**
+ * @summary Delete a depot and all its stock data
+ */
+export const DeleteDepotParams = zod.object({
+  "id": zod.coerce.number()
+})
+
+export const DeleteDepotResponse = zod.void()
+
+
+/**
  * @summary Search and list stock items
  */
 export const listStockQueryPageDefault = 1;
@@ -98,7 +130,8 @@ export const ListStockResponse = zod.object({
   "pcsCount": zod.number().nullish(),
   "stockDate": zod.coerce.date().nullish(),
   "uploadId": zod.number(),
-  "updatedAt": zod.coerce.date()
+  "updatedAt": zod.coerce.date(),
+  "hasImage": zod.boolean()
 })),
   "total": zod.number(),
   "page": zod.number(),

@@ -51,6 +51,7 @@ export interface StockItem {
   stockDate?: string | null;
   uploadId: number;
   updatedAt: string;
+  hasImage: boolean;
 }
 
 export interface StockPage {
@@ -110,6 +111,12 @@ export interface UploadInput {
   stockDate?: string;
   file: Blob;
 }
+
+export type UpdateDepotBody = {
+  name?: string;
+  /** @nullable */
+  location?: string | null;
+};
 
 export type ListStockParams = {
 /**

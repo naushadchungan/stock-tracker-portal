@@ -27,4 +27,5 @@ export interface StockItem {
   stockDate?: Date | null;
   uploadId: number;
   updatedAt: Date;
+  hasImage: boolean;
 }

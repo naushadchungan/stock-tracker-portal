@@ -30,6 +30,7 @@ import fitz
 import json
 import sys
 import re
+import base64
 
 DIMENSION_RE = re.compile(r'\\b\\d+\\s*[Xx]\\s*\\d+\\b')
 BOX_NUM_RE = re.compile(r'^[\\d]+\\.?\\d*\\s*(BOX)?$', re.IGNORECASE)
@@ -65,11 +66,53 @@ def extract_finish(name):
     m = FINISH_RE.search(name)
     return m.group(0).upper() if m else None
 
+def extract_page_images(page, doc):
+    """Extract images from a page, sorted top-to-bottom then left-to-right."""
+    images = []
+    try:
+        seen_xrefs = set()
+        for img_info in page.get_images(full=True):
+            xref = img_info[0]
+            if xref in seen_xrefs:
+                continue
+            seen_xrefs.add(xref)
+            try:
+                rects = page.get_image_rects(xref)
+                if not rects:
+                    continue
+                rect = rects[0]
+                # Skip tiny images (icons, borders, decorations)
+                if rect.width < 80 or rect.height < 80:
+                    continue
+                img_dict = doc.extract_image(xref)
+                if not img_dict or not img_dict.get('image'):
+                    continue
+                raw = img_dict['image']
+                # Skip very large images (unlikely to be tile thumbnails)
+                if len(raw) > 600000:
+                    continue
+                images.append({
+                    'b64': base64.b64encode(raw).decode('utf-8'),
+                    'ext': img_dict.get('ext', 'jpeg'),
+                    'y': rect.y0,
+                    'x': rect.x0,
+                    'w': rect.width,
+                    'h': rect.height,
+                })
+            except Exception:
+                pass
+    except Exception:
+        pass
+    # Sort by grid position: bucket rows by 150px bands, then left-to-right
+    images.sort(key=lambda i: (round(i['y'] / 150) * 150, i['x']))
+    return images
+
 def parse_pdf(path):
     doc = fitz.open(path)
     results = []
     for page_num in range(doc.page_count):
         page = doc[page_num]
+        page_tiles = []
         blocks = sorted(page.get_text("blocks"), key=lambda b: (round(b[1]/40)*40, b[0]))
         current_name_parts = []
         current_box = None
@@ -80,13 +123,14 @@ def parse_pdf(path):
             if current_name_parts and current_box is not None:
                 name = re.sub(r'\\s+', ' ', ' '.join(current_name_parts)).strip()
                 if len(name) > 5 and DIMENSION_RE.search(name):
-                    results.append({
+                    page_tiles.append({
                         'tileName': name,
                         'brand': extract_brand(name),
                         'size': extract_size(name),
                         'finish': extract_finish(name),
                         'boxCount': current_box,
                         'pcsCount': current_pcs,
+                        'imageData': None,
                     })
 
         for b in blocks:
@@ -128,6 +172,14 @@ def parse_pdf(path):
 
         save_current()
 
+        # Extract images from this page and match to tiles by position order
+        page_images = extract_page_images(page, doc)
+        for i, tile in enumerate(page_tiles):
+            if i < len(page_images):
+                tile['imageData'] = page_images[i]['b64']
+
+        results.extend(page_tiles)
+
     doc.close()
     return results
 
@@ -144,6 +196,7 @@ async function parsePdf(pdfBuffer: Buffer): Promise<Array<{
   finish: string | null;
   boxCount: number | null;
   pcsCount: number | null;
+  imageData: string | null;
 }>> {
   const tmpId = randomBytes(8).toString("hex");
   const pdfPath = join(tmpdir(), `upload_${tmpId}.pdf`);
@@ -154,7 +207,7 @@ async function parsePdf(pdfBuffer: Buffer): Promise<Array<{
       writeFile(pdfPath, pdfBuffer),
       writeFile(scriptPath, PYTHON_SCRIPT),
     ]);
-    const { stdout } = await execAsync(`python3 "${scriptPath}" "${pdfPath}"`, { timeout: 60000 });
+    const { stdout } = await execAsync(`python3 "${scriptPath}" "${pdfPath}"`, { timeout: 120000 });
     return JSON.parse(stdout.trim());
   } finally {
     await Promise.all([
@@ -216,17 +269,11 @@ router.post("/", upload.single("file"), async (req, res) => {
 
   const [uploadRecord] = await db
     .insert(uploadsTable)
-    .values({
-      depotId,
-      filename: req.file.originalname,
-      status: "processing",
-      stockDate,
-    })
+    .values({ depotId, filename: req.file.originalname, status: "processing", stockDate })
     .returning();
 
   res.status(201).json({ ...uploadRecord, depotName: depot.name });
 
-  // Background processing
   const fileBuffer = req.file.buffer;
   const uploadId = uploadRecord.id;
   const log = req.log;
@@ -236,14 +283,13 @@ router.post("/", upload.single("file"), async (req, res) => {
       const items = await parsePdf(fileBuffer);
 
       if (items.length === 0) {
-        await db
-          .update(uploadsTable)
+        await db.update(uploadsTable)
           .set({ status: "failed", errorMessage: "No stock items could be extracted from the PDF", completedAt: new Date() })
           .where(eq(uploadsTable.id, uploadId));
         return;
       }
 
-      // Replace existing stock for this depot
+      // Delete existing stock for this depot and replace
       await db.delete(stockItemsTable).where(eq(stockItemsTable.depotId, depotId));
 
       const toInsert = items.map((item) => ({
@@ -256,25 +302,20 @@ router.post("/", upload.single("file"), async (req, res) => {
         boxCount: item.boxCount !== null ? String(item.boxCount) : null,
         pcsCount: item.pcsCount !== null ? String(item.pcsCount) : null,
         stockDate,
+        imageData: item.imageData,
       }));
 
       for (let i = 0; i < toInsert.length; i += 100) {
         await db.insert(stockItemsTable).values(toInsert.slice(i, i + 100));
       }
 
-      await db
-        .update(uploadsTable)
+      await db.update(uploadsTable)
         .set({ status: "done", itemsExtracted: items.length, completedAt: new Date() })
         .where(eq(uploadsTable.id, uploadId));
     } catch (err) {
       log.error({ err }, "PDF processing failed");
-      await db
-        .update(uploadsTable)
-        .set({
-          status: "failed",
-          errorMessage: err instanceof Error ? err.message : "Processing failed",
-          completedAt: new Date(),
-        })
+      await db.update(uploadsTable)
+        .set({ status: "failed", errorMessage: err instanceof Error ? err.message : "Processing failed", completedAt: new Date() })
         .where(eq(uploadsTable.id, uploadId));
     }
   })();

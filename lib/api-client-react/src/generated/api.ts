@@ -30,6 +30,7 @@ import type {
   ListUploadsParams,
   StockFilters,
   StockPage,
+  UpdateDepotBody,
   Upload,
   UploadInput
 } from './api.schemas';
@@ -362,6 +363,149 @@ export function useGetDepot<TData = Awaited<ReturnType<typeof getDepot>>, TError
 
 
 
+
+export const getUpdateDepotUrl = (id: number,) => {
+
+
+
+
+  return `/api/depots/${id}`
+}
+
+/**
+ * @summary Update a depot name or location
+ */
+export const updateDepot = async (id: number,
+    updateDepotBody: UpdateDepotBody, options?: RequestInit): Promise<Depot> => {
+
+  return customFetch<Depot>(getUpdateDepotUrl(id),
+  {
+    ...options,
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+    body: JSON.stringify(updateDepotBody)
+  }
+);}
+
+
+
+
+
+export const getUpdateDepotMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateDepot>>, TError,{id: number;data: BodyType<UpdateDepotBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof updateDepot>>, TError,{id: number;data: BodyType<UpdateDepotBody>}, TContext> => {
+
+const mutationKey = ['updateDepot'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof updateDepot>>, {id: number;data: BodyType<UpdateDepotBody>}> = (props) => {
+          const {id,data} = props ?? {};
+
+          return  updateDepot(id,data,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type UpdateDepotMutationResult = NonNullable<Awaited<ReturnType<typeof updateDepot>>>
+    export type UpdateDepotMutationBody = BodyType<UpdateDepotBody>
+    export type UpdateDepotMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Update a depot name or location
+ */
+export const useUpdateDepot = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof updateDepot>>, TError,{id: number;data: BodyType<UpdateDepotBody>}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof updateDepot>>,
+        TError,
+        {id: number;data: BodyType<UpdateDepotBody>},
+        TContext
+      > => {
+      return useMutation(getUpdateDepotMutationOptions(options));
+    }
+
+export const getDeleteDepotUrl = (id: number,) => {
+
+
+
+
+  return `/api/depots/${id}`
+}
+
+/**
+ * @summary Delete a depot and all its stock data
+ */
+export const deleteDepot = async (id: number, options?: RequestInit): Promise<void> => {
+
+  return customFetch<void>(getDeleteDepotUrl(id),
+  {
+    ...options,
+    method: 'DELETE'
+
+
+  }
+);}
+
+
+
+
+
+export const getDeleteDepotMutationOptions = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteDepot>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof deleteDepot>>, TError,{id: number}, TContext> => {
+
+const mutationKey = ['deleteDepot'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+
+
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof deleteDepot>>, {id: number}> = (props) => {
+          const {id} = props ?? {};
+
+          return  deleteDepot(id,requestOptions)
+        }
+
+
+
+
+
+
+  return  { mutationFn, ...mutationOptions }}
+
+    export type DeleteDepotMutationResult = NonNullable<Awaited<ReturnType<typeof deleteDepot>>>
+
+    export type DeleteDepotMutationError = ErrorType<ErrorResponse>
+
+    /**
+ * @summary Delete a depot and all its stock data
+ */
+export const useDeleteDepot = <TError = ErrorType<ErrorResponse>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof deleteDepot>>, TError,{id: number}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof deleteDepot>>,
+        TError,
+        {id: number},
+        TContext
+      > => {
+      return useMutation(getDeleteDepotMutationOptions(options));
+    }
 
 export const getListStockUrl = (params?: ListStockParams,) => {
   const normalizedParams = new URLSearchParams();

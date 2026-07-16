@@ -17,6 +17,7 @@ export * from './listUploadsParams';
 export * from './stockFilters';
 export * from './stockItem';
 export * from './stockPage';
+export * from './updateDepotBody';
 export * from './upload';
 export * from './uploadInput';
 export * from './uploadStatus';
