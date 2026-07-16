@@ -1,8 +1,8 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { depotsTable, uploadsTable, stockItemsTable } from "@workspace/db";
-import { eq, sql, desc } from "drizzle-orm";
-import { DepotInput } from "@workspace/api-zod";
+import { eq, sql } from "drizzle-orm";
+import { CreateDepotBody } from "@workspace/api-zod";
 
 const router = Router();
 
@@ -24,17 +24,17 @@ router.get("/", async (req, res) => {
       .groupBy(depotsTable.id)
       .orderBy(depotsTable.name);
 
-    res.json(depots);
+    return res.json(depots);
   } catch (err) {
     req.log.error({ err }, "Failed to list depots");
-    res.status(500).json({ error: "Internal server error" });
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 
 // POST /api/depots
 router.post("/", async (req, res) => {
   try {
-    const parsed = DepotInput.safeParse(req.body);
+    const parsed = CreateDepotBody.safeParse(req.body);
     if (!parsed.success) {
       return res.status(400).json({ error: "Invalid depot data" });
     }
@@ -42,14 +42,14 @@ router.post("/", async (req, res) => {
       .insert(depotsTable)
       .values({ name: parsed.data.name, location: parsed.data.location })
       .returning();
-    res.status(201).json({ ...depot, itemCount: 0 });
+    return res.status(201).json({ ...depot, itemCount: 0 });
   } catch (err: unknown) {
     const pgErr = err as { code?: string };
     if (pgErr.code === "23505") {
       return res.status(400).json({ error: "A depot with that name already exists" });
     }
     req.log.error({ err }, "Failed to create depot");
-    res.status(500).json({ error: "Internal server error" });
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -75,10 +75,10 @@ router.get("/:id", async (req, res) => {
       .groupBy(depotsTable.id);
 
     if (!depot) return res.status(404).json({ error: "Depot not found" });
-    res.json(depot);
+    return res.json(depot);
   } catch (err) {
     req.log.error({ err }, "Failed to get depot");
-    res.status(500).json({ error: "Internal server error" });
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 

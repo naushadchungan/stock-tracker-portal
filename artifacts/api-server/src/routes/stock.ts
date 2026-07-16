@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "@workspace/db";
 import { stockItemsTable, depotsTable, uploadsTable } from "@workspace/db";
-import { eq, sql, ilike, and, desc, count, sum, isNotNull, asc } from "drizzle-orm";
+import { eq, sql, ilike, and, desc, count, asc, isNotNull } from "drizzle-orm";
 
 const router = Router();
 
@@ -39,7 +39,7 @@ router.get("/", async (req, res) => {
 
     const [totalResult, items] = await Promise.all([
       db
-        .select({ count: count() })
+        .select({ total: count() })
         .from(stockItemsTable)
         .where(whereClause),
       db
@@ -66,9 +66,9 @@ router.get("/", async (req, res) => {
         .offset(offset),
     ]);
 
-    const total = Number(totalResult[0]?.count ?? 0);
+    const total = Number(totalResult[0]?.total ?? 0);
 
-    res.json({
+    return res.json({
       items,
       total,
       page,
@@ -77,7 +77,7 @@ router.get("/", async (req, res) => {
     });
   } catch (err) {
     req.log.error({ err }, "Failed to list stock");
-    res.status(500).json({ error: "Internal server error" });
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -99,10 +99,10 @@ router.get("/summary", async (req, res) => {
       .groupBy(depotsTable.id, depotsTable.name)
       .orderBy(depotsTable.name);
 
-    res.json(summary);
+    return res.json(summary);
   } catch (err) {
     req.log.error({ err }, "Failed to get stock summary");
-    res.status(500).json({ error: "Internal server error" });
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 
@@ -130,14 +130,14 @@ router.get("/filters", async (req, res) => {
         .orderBy(asc(stockItemsTable.finish)),
     ]);
 
-    res.json({
+    return res.json({
       brands: brands.map((b) => b.brand).filter(Boolean),
       sizes: sizes.map((s) => s.size).filter(Boolean),
       finishes: finishes.map((f) => f.finish).filter(Boolean),
     });
   } catch (err) {
     req.log.error({ err }, "Failed to get stock filters");
-    res.status(500).json({ error: "Internal server error" });
+    return res.status(500).json({ error: "Internal server error" });
   }
 });
 
