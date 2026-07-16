@@ -64,19 +64,28 @@ router.get("/", async (req, res) => {
 // GET /api/stock/summary
 router.get("/summary", async (req, res) => {
   try {
+    const lastUploadSq = db
+      .select({
+        depotId: uploadsTable.depotId,
+        lastUploadAt: sql<string>`max(${uploadsTable.createdAt})`.as("lastUploadAt"),
+      })
+      .from(uploadsTable)
+      .groupBy(uploadsTable.depotId)
+      .as("lastUpload");
+
     const summary = await db
       .select({
         depotId: depotsTable.id,
         depotName: depotsTable.name,
         totalItems: count(stockItemsTable.id),
         totalBoxes: sql<number>`coalesce(sum(cast(${stockItemsTable.boxCount} as numeric)), 0)`,
-        lastUploadAt: sql<string | null>`max(${uploadsTable.createdAt})`,
+        lastUploadAt: lastUploadSq.lastUploadAt,
         stockDate: sql<string | null>`max(${stockItemsTable.stockDate})`,
       })
       .from(depotsTable)
       .leftJoin(stockItemsTable, eq(stockItemsTable.depotId, depotsTable.id))
-      .leftJoin(uploadsTable, eq(uploadsTable.depotId, depotsTable.id))
-      .groupBy(depotsTable.id, depotsTable.name)
+      .leftJoin(lastUploadSq, eq(lastUploadSq.depotId, depotsTable.id))
+      .groupBy(depotsTable.id, depotsTable.name, lastUploadSq.lastUploadAt)
       .orderBy(depotsTable.name);
     return res.json(summary);
   } catch (err) {
