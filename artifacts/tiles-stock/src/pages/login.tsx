@@ -1,5 +1,5 @@
 import * as React from "react"
-import { Package, Loader2 } from "lucide-react"
+import { Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -41,13 +41,12 @@ export default function LoginPage() {
       <div className="w-full max-w-sm space-y-8">
         {/* Logo */}
         <div className="flex flex-col items-center gap-3 text-center">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10">
-            <Package className="h-9 w-9 text-primary" />
-          </div>
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight text-foreground">StockOps</h1>
-            <p className="mt-1 text-sm text-muted-foreground">Shine Build Hub · Tile Stock Manager</p>
-          </div>
+          <img
+            src="/shine-logo.jpg"
+            alt="Shine Build Hub"
+            className="h-20 w-20 rounded-2xl object-cover shadow-sm"
+          />
+          <p className="mt-1 text-sm text-muted-foreground">Shine Build Hub · Tile Stock Manager</p>
         </div>
 
         {/* Form card */}

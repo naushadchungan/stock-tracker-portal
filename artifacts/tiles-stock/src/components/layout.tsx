@@ -1,7 +1,7 @@
 import * as React from "react"
 import { Link, useLocation } from "wouter"
 import {
-  Package, Search, UploadCloud, Building2,
+  Search, UploadCloud, Building2,
   LayoutDashboard, Menu, LogOut, ShieldCheck, Users
 } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -44,9 +44,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-[100dvh] w-full bg-background flex-col md:flex-row">
       {/* Mobile Header */}
       <header className="flex h-14 items-center justify-between border-b bg-card px-4 md:hidden">
-        <div className="flex items-center gap-2 font-bold text-primary">
-          <Package className="h-6 w-6" />
-          <span>StockOps</span>
+        <div className="flex items-center gap-2">
+          <img src="/shine-logo.jpg" alt="Shine Build Hub" className="h-7 w-7 rounded-md object-cover" />
+          <span className="font-bold text-primary">Shine Build Hub</span>
         </div>
         <button
           onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
@@ -65,8 +65,8 @@ export function Layout({ children }: { children: React.ReactNode }) {
       >
         <div className="flex h-14 md:h-16 items-center px-6 border-b border-border/50">
           <Link href="/" className="flex items-center gap-2 font-bold text-xl text-primary tracking-tight">
-            <Package className="h-6 w-6" />
-            <span>StockOps</span>
+            <img src="/shine-logo.jpg" alt="Shine Build Hub" className="h-8 w-8 rounded-lg object-cover" />
+            <span>Shine Build Hub</span>
           </Link>
         </div>
 
