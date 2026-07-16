@@ -145,42 +145,6 @@ export default function StockSearch() {
             )}
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <Select
-              value={filters.depotId?.toString() || ""}
-              onChange={(e) => handleFilterChange('depotId', e.target.value ? Number(e.target.value) : null)}
-            >
-              <option value="">All Depots</option>
-              {depots?.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-            </Select>
-
-            <Select
-              value={filters.brand}
-              onChange={(e) => handleFilterChange('brand', e.target.value)}
-              disabled={!availableFilters?.brands?.length}
-            >
-              <option value="">All Brands</option>
-              {availableFilters?.brands.map(b => <option key={b} value={b}>{b}</option>)}
-            </Select>
-
-            <Select
-              value={filters.size}
-              onChange={(e) => handleFilterChange('size', e.target.value)}
-              disabled={!availableFilters?.sizes?.length}
-            >
-              <option value="">All Sizes</option>
-              {availableFilters?.sizes.map(s => <option key={s} value={s}>{s}</option>)}
-            </Select>
-
-            <Select
-              value={filters.finish}
-              onChange={(e) => handleFilterChange('finish', e.target.value)}
-              disabled={!availableFilters?.finishes?.length}
-            >
-              <option value="">All Finishes</option>
-              {availableFilters?.finishes.map(f => <option key={f} value={f}>{f}</option>)}
-            </Select>
-          </div>
         </div>
       </Card>
 

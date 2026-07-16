@@ -46,7 +46,7 @@ export default function LoginPage() {
           </div>
           <div>
             <h1 className="text-3xl font-bold tracking-tight text-foreground">StockOps</h1>
-            <p className="mt-1 text-sm text-muted-foreground">Kerala Operations · Tile Stock Manager</p>
+            <p className="mt-1 text-sm text-muted-foreground">Shine Build Hub · Tile Stock Manager</p>
           </div>
         </div>
 
