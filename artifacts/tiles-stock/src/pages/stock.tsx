@@ -180,26 +180,17 @@ export default function StockSearch() {
             <table className="w-full text-sm text-left relative">
               <thead className="text-xs text-muted-foreground uppercase bg-muted/50 sticky top-0 z-20 backdrop-blur-sm shadow-sm font-semibold tracking-wider">
                 <tr>
-                  <th className="px-3 py-3 w-[70px]">Photo</th>
                   <th className="px-4 py-3 font-semibold">Tile Details</th>
-                  <th className="px-4 py-3 font-semibold w-[14%]">Brand</th>
                   <th className="px-4 py-3 font-semibold w-[14%]">Size & Finish</th>
                   <th className="px-4 py-3 font-semibold text-right w-[10%]">Stock</th>
+                  <th className="px-4 py-3 font-semibold w-[14%]">Brand</th>
                   <th className="px-4 py-3 font-semibold w-[18%]">Location</th>
+                  <th className="px-3 py-3 w-[70px]">Photo</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/50">
                 {stockPage?.items.map((item) => (
                   <tr key={item.id} className="hover:bg-muted/30 transition-colors group">
-                    <td className="px-3 py-2">
-                      {item.hasImage ? (
-                        <TileImage id={item.id} name={item.tileName} />
-                      ) : (
-                        <div className="w-14 h-14 rounded border border-dashed border-border bg-muted/30 flex items-center justify-center">
-                          <ImageOff className="h-4 w-4 text-muted-foreground/30" />
-                        </div>
-                      )}
-                    </td>
                     <td className="px-4 py-3 font-medium text-foreground">
                       <div className="flex flex-col">
                         <span className="text-base font-bold tracking-tight">{item.tileName}</span>
@@ -209,13 +200,6 @@ export default function StockSearch() {
                           </span>
                         )}
                       </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      {item.brand ? (
-                        <Badge variant="outline" className="font-normal text-xs">{item.brand}</Badge>
-                      ) : (
-                        <span className="text-muted-foreground text-xs">-</span>
-                      )}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-col gap-1.5">
@@ -247,6 +231,13 @@ export default function StockSearch() {
                       </div>
                     </td>
                     <td className="px-4 py-3">
+                      {item.brand ? (
+                        <Badge variant="outline" className="font-normal text-xs">{item.brand}</Badge>
+                      ) : (
+                        <span className="text-muted-foreground text-xs">-</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
                       <div className="flex flex-col gap-1">
                         <span className="flex items-center gap-1.5 text-sm font-medium">
                           <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
@@ -257,6 +248,15 @@ export default function StockSearch() {
                           {item.stockDate ? formatDate(item.stockDate) : 'Unknown Date'}
                         </span>
                       </div>
+                    </td>
+                    <td className="px-3 py-2">
+                      {item.hasImage ? (
+                        <TileImage id={item.id} name={item.tileName} />
+                      ) : (
+                        <div className="w-14 h-14 rounded border border-dashed border-border bg-muted/30 flex items-center justify-center">
+                          <ImageOff className="h-4 w-4 text-muted-foreground/30" />
+                        </div>
+                      )}
                     </td>
                   </tr>
                 ))}
