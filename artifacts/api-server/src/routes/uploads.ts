@@ -169,18 +169,37 @@ const anthropic = new Anthropic({
 });
 
 // ── Shared JSON extraction helper ─────────────────────────────────────────────
+// Handles three Claude output variants:
+//   (A) One big JSON array for the whole batch        → normal parse
+//   (B) One JSON array per page, emitted separately   → collect + merge all [...] blocks
+//   (C) No commas between objects  }↵{               → normalise then parse
+//   (D) Response truncated mid-array                  → truncation recovery
 function extractJsonArray(text: string): unknown[] | null {
-  // Normalise Claude's "no-comma newline-delimited" format: }\n{ → },{
+  // Normalise no-comma newline-delimited format: }\n{ → },{
   const normalised = text.replace(/\}\s*\n\s*\{/g, "},\n{");
 
-  const jsonMatch = normalised.match(/\[[\s\S]*\]/);
-  if (jsonMatch) {
+  // (A) Single big array — try the greedily matched outer [...] first
+  const greedyMatch = normalised.match(/\[[\s\S]*\]/);
+  if (greedyMatch) {
     try {
-      const p = JSON.parse(jsonMatch[0]);
-      if (Array.isArray(p)) return p;
-    } catch { /* fall through to recovery */ }
+      const p = JSON.parse(greedyMatch[0]);
+      if (Array.isArray(p) && p.length > 0) return p;
+    } catch { /* fall through */ }
   }
-  // Truncation recovery: response cut off mid-array — close and parse what we have
+
+  // (B) Multiple per-page arrays — collect every [...] block non-greedily and merge
+  const merged: unknown[] = [];
+  const blockRe = /\[[^\[\]]*\]/g; // non-greedy: innermost [...] blocks only
+  let m: RegExpExecArray | null;
+  while ((m = blockRe.exec(normalised)) !== null) {
+    try {
+      const p = JSON.parse(m[0]);
+      if (Array.isArray(p)) merged.push(...p);
+    } catch { /* skip malformed block */ }
+  }
+  if (merged.length > 0) return merged;
+
+  // (D) Truncation recovery: close the array at the last complete object
   const arrayStart = normalised.indexOf("[");
   if (arrayStart === -1) return null;
   let partial = normalised.slice(arrayStart);
