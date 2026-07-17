@@ -2,6 +2,7 @@ import { Router } from "express";
 import { db } from "@workspace/db";
 import { stockItemsTable, depotsTable, uploadsTable } from "@workspace/db";
 import { eq, sql, ilike, and, desc, count, asc, isNotNull } from "drizzle-orm";
+import { requireAdmin } from "../middlewares/requireAuth";
 
 const router = Router();
 
@@ -120,6 +121,67 @@ router.get("/filters", async (req, res) => {
     return res.status(500).json({ error: "Internal server error" });
   }
 });
+
+// POST /api/stock/import-excel  — admin: replace depot stock from a corrected Excel (sent as JSON)
+router.post("/import-excel", requireAdmin, async (req, res) => {
+  try {
+    const { depotId, stockDate, items } = req.body as {
+      depotId: number
+      stockDate?: string
+      items: {
+        tileName: string; design?: string; brand?: string; size?: string
+        finish?: string; boxCount?: number; pcsCount?: number; location?: string
+      }[]
+    }
+
+    if (!depotId || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "depotId and a non-empty items[] are required" })
+    }
+
+    const [depot] = await db.select().from(depotsTable).where(eq(depotsTable.id, depotId))
+    if (!depot) return res.status(404).json({ error: "Depot not found" })
+
+    const date = stockDate || new Date().toISOString().slice(0, 10)
+
+    // Create an upload record so history is preserved
+    const [upload] = await db.insert(uploadsTable).values({
+      depotId,
+      filename: `excel-teaching-${date}.xlsx`,
+      status: "done",
+      itemsExtracted: items.length,
+      stockDate: date,
+      completedAt: new Date(),
+    }).returning()
+
+    // Replace existing stock for this depot
+    await db.delete(stockItemsTable).where(eq(stockItemsTable.depotId, depotId))
+
+    const toInsert = items
+      .map(item => ({
+        depotId,
+        uploadId: upload.id,
+        tileName: String(item.tileName ?? "").trim(),
+        brand:    item.brand    ? String(item.brand).trim()   : null,
+        size:     item.size     ? String(item.size).trim()    : null,
+        design:   item.design   ? String(item.design).trim()  : null,
+        finish:   item.finish   ? String(item.finish).trim()  : null,
+        boxCount: item.boxCount != null ? String(item.boxCount) : "0",
+        pcsCount: item.pcsCount != null ? String(item.pcsCount) : null,
+        stockDate: date,
+        location: item.location ? String(item.location).trim() : null,
+      }))
+      .filter(i => i.tileName.length > 0)
+
+    for (let i = 0; i < toInsert.length; i += 100) {
+      await db.insert(stockItemsTable).values(toInsert.slice(i, i + 100))
+    }
+
+    return res.status(201).json({ uploadId: upload.id, itemCount: toInsert.length, depotName: depot.name })
+  } catch (err) {
+    req.log.error({ err }, "Failed to import excel")
+    return res.status(500).json({ error: "Internal server error" })
+  }
+})
 
 // GET /api/stock/:id/image  — serves raw image bytes from stored base64
 router.get("/:id/image", async (req, res) => {
