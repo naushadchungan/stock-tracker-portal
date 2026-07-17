@@ -29,6 +29,8 @@ const upload = multer({
 
 // ── Python script: text + image extraction only ───────────────────────────────
 // Claude handles all structured parsing; Python just pulls raw text and tile images.
+// If the PDF has no text layer at all (fully image-based, e.g. Starko/Kresto),
+// each page is rendered as a PNG so Claude Vision can OCR the content.
 const PYTHON_SCRIPT = `
 import fitz
 import json
@@ -74,7 +76,7 @@ def page_to_visual_text(page):
     """
     words = page.get_text('words')  # (x0,y0,x1,y1,word,block,line,word_no)
     if not words:
-        return page.get_text('text')
+        return ''
 
     row_tolerance = 5   # px — words within this Y range share a visual row
     col_gap_min   = 40  # px — gaps larger than this indicate a new column
@@ -121,10 +123,31 @@ if __name__ == '__main__':
             img['page'] = page_num
             all_images.append(img)
 
+    joined_text = '\\n'.join(all_text)
+    has_text = bool(joined_text.strip())
+
+    # If the PDF has no text layer (fully image-based), render every page as PNG
+    # so the Node.js caller can pass them to Claude Vision for OCR-based extraction.
+    page_images = []
+    if not has_text:
+        for page_num in range(doc.page_count):
+            page = doc[page_num]
+            pix = page.get_pixmap(matrix=fitz.Matrix(1.0, 1.0), alpha=False)
+            png_bytes = pix.tobytes('png')
+            page_images.append({
+                'b64': base64.b64encode(png_bytes).decode('utf-8'),
+                'page': page_num,
+                'mime': 'image/png'
+            })
+
     doc.close()
 
     with open(out_path, 'w') as f:
-        json.dump({'text': '\\n'.join(all_text), 'images': all_images}, f)
+        json.dump({
+            'text': joined_text,
+            'images': all_images,
+            'page_images': page_images
+        }, f)
 `;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -145,6 +168,138 @@ const anthropic = new Anthropic({
   apiKey:  process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
 });
 
+// ── Shared JSON extraction helper ─────────────────────────────────────────────
+function extractJsonArray(text: string): unknown[] | null {
+  const jsonMatch = text.match(/\[[\s\S]*\]/);
+  if (jsonMatch) {
+    try {
+      const p = JSON.parse(jsonMatch[0]);
+      if (Array.isArray(p)) return p;
+    } catch { /* fall through to recovery */ }
+  }
+  // Truncation recovery: response cut off mid-array — close and parse what we have
+  const arrayStart = text.indexOf("[");
+  if (arrayStart === -1) return null;
+  let partial = text.slice(arrayStart);
+  const lastClose = partial.lastIndexOf("}");
+  if (lastClose === -1) return null;
+  partial = partial.slice(0, lastClose + 1) + "]";
+  try {
+    const p = JSON.parse(partial);
+    return Array.isArray(p) ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+// ── Vision-based parser (for fully image-based PDFs, e.g. Starko/Kresto) ──────
+// Used when Python text extraction yields nothing. Renders pages as PNGs and
+// sends them to Claude Vision for OCR-based structured extraction.
+async function parseViaVision(
+  pageImages: Array<{ b64: string; page: number; mime: string }>,
+  tileImages: Array<{ b64: string; y: number; page: number }>
+): Promise<ParsedItem[]> {
+  // Group tile images by page number (sorted by Y already from Python)
+  const tilesByPage = new Map<number, string[]>();
+  for (const img of tileImages) {
+    const arr = tilesByPage.get(img.page) ?? [];
+    arr.push(img.b64);
+    tilesByPage.set(img.page, arr);
+  }
+  // Make mutable copies so we can shift() from each page's queue
+  const tileQueueByPage = new Map<number, string[]>();
+  for (const [page, imgs] of tilesByPage) {
+    tileQueueByPage.set(page, [...imgs]);
+  }
+
+  // Build Claude Vision request — all pages as images + a text prompt
+  type ImageBlock = {
+    type: "image";
+    source: { type: "base64"; media_type: "image/png" | "image/jpeg"; data: string };
+  };
+  const imageBlocks: ImageBlock[] = pageImages.map((pi) => ({
+    type: "image" as const,
+    source: {
+      type:       "base64"  as const,
+      media_type: (pi.mime === "image/jpeg" ? "image/jpeg" : "image/png") as "image/png" | "image/jpeg",
+      data:       pi.b64,
+    },
+  }));
+
+  const promptText = `You are a tile stock data extractor for an Indian tiles business.
+The images above are consecutive pages from a Kresto/Starko tile stock list PDF.
+The first image is the cover page — skip it entirely.
+
+Each data page shows a 3-column table:
+  Column 1 (left)   — Item Name  (e.g. "KRESTO TANISHQE BEIGE")
+  Column 2 (centre) — Qty        (e.g. "108 BOX" or "OUT OF STOCK")
+  Column 3 (right)  — Picture    (tile photo — ignore, we handle separately)
+
+Section header rows (coloured/shaded background, e.g. "1200x1800 GLOSSY SERIES",
+"800x600 MATT SERIES", "600X600 GLOSSY SERIES") are NOT items.
+Extract the tile size (e.g. "1200X1800") and finish (e.g. "GLOSSY") from them
+and apply those values to every item that follows, until the next header.
+
+Rules:
+  • tileName  : The full text in the Item Name cell (include size prefix if present, e.g. "600X1200 KRESTO ELITE BROWN").
+  • brand     : Brand name found in the item name (e.g. "KRESTO", "LAVIT", "ONE TOUCH") or null.
+  • size      : From the section header above (e.g. "1200X1800"). Override with size embedded in item name if present.
+  • finish    : From the section header (e.g. "GLOSSY", "MATT") or from item name if stated.
+  • boxCount  : Parse from the Qty cell — "NNN BOX" → NNN (number); "OUT OF STOCK" → 0. Never null.
+  • pcsCount  : null (not shown in this format).
+  • location  : null (not used in this format).
+  • pageIndex : 0-based index into the page images sent above (cover = 0, first data page = 1, etc.).
+
+Output ONLY a raw JSON array. Each element on a SINGLE LINE. No markdown, no explanation.
+Example:
+[{"tileName":"KRESTO TANISHQE BEIGE","brand":"KRESTO","size":"1200X1800","finish":"GLOSSY","boxCount":0,"pcsCount":null,"location":null,"pageIndex":1},{"tileName":"KRESTO BRECCIA-A","brand":"KRESTO","size":"1200X1800","finish":"GLOSSY","boxCount":108,"pcsCount":null,"location":null,"pageIndex":1}]
+
+Include ALL items from ALL pages. Skip the cover page, section headers, footers, email addresses, and page numbers.`;
+
+  let fullText = "";
+  const stream = await anthropic.messages.stream({
+    model:      "claude-sonnet-4-6",
+    max_tokens: 20000,
+    messages: [{
+      role:    "user",
+      content: [...imageBlocks, { type: "text" as const, text: promptText }],
+    }],
+  });
+
+  for await (const event of stream) {
+    if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+      fullText += event.delta.text;
+    }
+  }
+
+  const parsed = extractJsonArray(fullText);
+  if (!parsed) return [];
+
+  return (parsed as Record<string, unknown>[])
+    .map((item) => {
+      const pageIdx = item.pageIndex != null ? Number(item.pageIndex) : null;
+      // Pop the next tile image for this page (items come top-to-bottom; images are Y-sorted)
+      let imageData: string | null = null;
+      if (pageIdx !== null) {
+        const queue = tileQueueByPage.get(pageIdx);
+        if (queue && queue.length > 0) {
+          imageData = queue.shift() ?? null;
+        }
+      }
+      return {
+        tileName:  String(item.tileName  ?? "").trim(),
+        brand:     item.brand   ? String(item.brand).trim()   : null,
+        size:      item.size    ? String(item.size).trim()    : null,
+        finish:    item.finish  ? String(item.finish).trim()  : null,
+        boxCount:  item.boxCount  != null ? Number(item.boxCount)  : null,
+        pcsCount:  item.pcsCount  != null ? Number(item.pcsCount)  : null,
+        imageData,
+        location:  null,
+      };
+    })
+    .filter((item) => item.tileName.length > 0);
+}
+
 // ── Main parser ───────────────────────────────────────────────────────────────
 async function parsePdf(pdfBuffer: Buffer): Promise<ParsedItem[]> {
   const tmpId      = randomBytes(8).toString("hex");
@@ -153,17 +308,19 @@ async function parsePdf(pdfBuffer: Buffer): Promise<ParsedItem[]> {
   const outPath    = join(tmpdir(), `result_${tmpId}.json`);
 
   let rawText = "";
-  let images: { b64: string; y: number; page: number }[] = [];
+  let images:      { b64: string; y: number; page: number }[] = [];
+  let pageImages:  { b64: string; page: number; mime: string }[] = [];
 
   try {
     await Promise.all([
       writeFile(pdfPath, pdfBuffer),
       writeFile(scriptPath, PYTHON_SCRIPT),
     ]);
-    await execAsync(`python3 "${scriptPath}" "${pdfPath}" "${outPath}"`, { timeout: 60_000 });
+    await execAsync(`python3 "${scriptPath}" "${pdfPath}" "${outPath}"`, { timeout: 120_000 });
     const raw = JSON.parse(await readFile(outPath, "utf8"));
-    rawText = raw.text   ?? "";
-    images  = raw.images ?? [];
+    rawText     = raw.text        ?? "";
+    images      = raw.images      ?? [];
+    pageImages  = raw.page_images ?? [];
   } finally {
     await Promise.all([
       unlink(pdfPath).catch(() => {}),
@@ -172,10 +329,13 @@ async function parsePdf(pdfBuffer: Buffer): Promise<ParsedItem[]> {
     ]);
   }
 
-  if (!rawText.trim()) return [];
+  // ── Image-only PDF (no text layer) → use Claude Vision ────────────────────
+  if (!rawText.trim()) {
+    if (pageImages.length === 0) return [];
+    return parseViaVision(pageImages, images);
+  }
 
-  // Claude does all structured extraction via Replit AI Integrations
-  // Use streaming to avoid proxy timeout on long responses
+  // ── Text-based PDF → use Claude text extraction (existing path) ───────────
   let fullText = "";
   const stream = await anthropic.messages.stream({
     model:      "claude-sonnet-4-6",
@@ -259,38 +419,17 @@ ${rawText}`,
     }
   }
 
-  // Robustly extract the JSON array even if Claude adds surrounding text or is truncated
-  let rawJson = fullText;
-  const jsonMatch = rawJson.match(/\[[\s\S]*\]/);
-  if (!jsonMatch) {
-    // Truncation recovery: response cut off mid-array — close the array and parse what we have
-    const arrayStart = rawJson.indexOf("[");
-    if (arrayStart === -1) return [];
-    let partial = rawJson.slice(arrayStart);
-    // Remove any trailing incomplete object (ends without closing brace)
-    const lastClose = partial.lastIndexOf("}");
-    if (lastClose === -1) return [];
-    partial = partial.slice(0, lastClose + 1) + "]";
-    try {
-      const p = JSON.parse(partial);
-      if (Array.isArray(p)) rawJson = partial;
-      else return [];
-    } catch {
-      return [];
-    }
-  } else {
-    rawJson = jsonMatch[0];
-  }
+  const parsed = extractJsonArray(fullText);
+  if (!parsed) return [];
 
-  let parsed: ParsedItem[];
+  let typedParsed: Record<string, unknown>[];
   try {
-    parsed = JSON.parse(rawJson);
-    if (!Array.isArray(parsed)) return [];
+    typedParsed = parsed as Record<string, unknown>[];
   } catch {
     return [];
   }
 
-  return parsed
+  return typedParsed
     .map((item, i) => ({
       tileName:  String(item.tileName  ?? "").trim(),
       brand:     item.brand   ? String(item.brand).trim()   : null,

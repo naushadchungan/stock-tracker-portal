@@ -1,0 +1,1 @@
+- [Starko/Kresto PDF Vision Parsing](starko-vision-parser.md) — no text layer; uses Claude Vision fallback when rawText is empty + page_images present
