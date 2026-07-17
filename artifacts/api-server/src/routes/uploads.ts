@@ -28,9 +28,13 @@ const upload = multer({
 });
 
 // ── Python script ────────────────────────────────────────────────────────────
-// Extracts raw text + parses all tile items + captures images from the PDF.
+// Supports two PDF formats:
+//   • Stanza format  – dimension-prefixed tile names, section headers with "(N PCS)"
+//   • Kottakkal format – columnar table: NO / DESIGN / ITEM NAME / SIZE /
+//                        STOCK(BOX) / BOOKING / BALANCE(BOX) / NO PCS/BOX
+//     Detection: text contains "BALANCE" and "BOOKING" keywords.
+//     boxCount comes from BALANCE (BOX) column; STOCK(BOX) is ignored.
 // Returns { items, text, images }.
-// TypeScript uses items directly; falls back to Claude if count is too low.
 const PYTHON_SCRIPT = `
 import fitz
 import json
@@ -38,6 +42,7 @@ import sys
 import re
 import base64
 
+# ── shared brand list ─────────────────────────────────────────────────────────
 BRANDS = sorted([
     'L-TILE','ONE TOUCH','SHREEM','MOZILLA','SUZORA','BEETHAS','SPEROX',
     'ANTONOVA','LIMONZA','LATTO','AARAV','SOLOGRIS','SOLOGRES','MIRACLE',
@@ -46,22 +51,27 @@ BRANDS = sorted([
     'LACTOSE','SOLOSTONE','MARBILANO','STATUS','MILLENNIUM','LIVOLLA',
     'MONOLITH','NOKEN','PARCOS','LV','ROTON','DIOR',
     'BLUEGRESS','GEOGRESS','ROCK','DONATO','CORAL','METRO','ROLLZA',
-    'ROLLANCE','ROLLSTAR','CEVIC','KAMRON','SANFORD','SOLOREX','ICOLUX',
-    'LAXVEER','ORIANA','ORINDA','PENGVIN','ROCART','VIZOLI','TORINO',
+    'ROLLANCE','ROLLSTAR','ROLLENCE','CEVIC','KAMRON','SANFORD','SOLOREX',
+    'ICOLUX','LAXVEER','ORIANA','ORINDA','PENGVIN','ROCART','VIZOLI','TORINO',
     'CAVOS','FUSION','GRAYSTONE','EXOTICA','TAURUS','PASSION','CIBELA',
     'KAG','SOLO','NEVADA','CRESTO','FORTUNE','NEXUS','OPULUX','KRESTO',
     'LEMZON','LAVIT','BLUESTONE','NITCO','SOMANY','KAJARIA','JOHNSON',
     'RAK','SIMPOLO','SIMONZA','AXOR','VELBON','CASA','KIVOS','SPENTAGON',
     'FRITA','MILLION','LOREM','SUNFIELD','VARG','PASSERO','KSTONE','EVOK',
-    'GRACE','NOVENA','CASAGRES','EUROTILE','ROYALE','ATLAS',
+    'GRACE','NOVENA','CASAGRES','EUROTILE','ROYALE','ATLAS','LIVENZA',
 ], key=len, reverse=True)
 
-SECTION_RE  = re.compile(r'\\(\\s*\\d+\\s*PCS\\s*\\)', re.IGNORECASE)
-DIM_TILE_RE = re.compile(r'^\\d{1,4}\\s*[Xx]\\s*\\d{1,4}\\s+\\S')
-NUM_RE      = re.compile(r'^\\d+(\\.\\d+)?\\s*$')
-DIM_ONLY_RE = re.compile(r'^\\(?\\s*\\d{1,4}\\s*[Xx]\\s*\\d{1,4}\\s*\\)?$', re.IGNORECASE)
-DIM_EXTRACT = re.compile(r'(\\d{1,4})\\s*[Xx]\\s*(\\d{1,4})', re.IGNORECASE)
-FINISH_RE   = re.compile(
+# ── shared regexes ────────────────────────────────────────────────────────────
+SECTION_RE    = re.compile(r'\\(\\s*\\d+\\s*PCS\\s*\\)', re.IGNORECASE)
+DIM_TILE_RE   = re.compile(r'^\\d{1,4}\\s*[Xx]\\s*\\d{1,4}\\s+\\S')
+NUM_RE        = re.compile(r'^-?\\d+(\\.\\d+)?\\s*$')
+INT_RE        = re.compile(r'^\\d+$')
+DIM_ONLY_RE   = re.compile(r'^\\(?\\s*\\d{1,4}\\s*[Xx]\\s*\\d{1,4}\\s*\\)?$', re.IGNORECASE)
+DIM_EXTRACT   = re.compile(r'(\\d{1,4})\\s*[Xx]\\s*(\\d{1,4})', re.IGNORECASE)
+SIZE_RE       = re.compile(r'^\\d{3,4}[xX]\\d{3,4}$')
+STOCK_BOX_RE  = re.compile(r'^(-?\\d+(?:\\.\\d+)?)\\s*Box$', re.IGNORECASE)
+DESIGN_TAG_RE = re.compile(r'^\\([^)]*\\)\\s*')
+FINISH_RE     = re.compile(
     r'\\b(GLOSSY|MATT|MATTE|POLISHED|FULLBODY|FULL\\s*BODY|HIGH\\s*GLOSSY|'
     r'HI\\s*GLOSSY|NANO|CARVING|COLOUR\\s*BODY|SEMI\\s*HIGH\\s*GLOSSY|'
     r'PUNCH\\s*MATT|SUPER\\s*HG|ENDLESS|LAPATO|SATIN|SUGAR|RUSTIC)\\b',
@@ -72,22 +82,28 @@ SKIP_RE = re.compile(
     r'^\\($|^\\)$|^-+$|^=+$)',
     re.IGNORECASE
 )
+NOISE_RE = re.compile(r'@|BIZTILETECH|STOCK SUMMARY', re.IGNORECASE)
 
+KOTTAKKAL_HEADER_SET = {
+    'NO','DESIGN','ITEM NAME','SIZE','STOCK (BOX)','BOOKING',
+    'BALANCE','(BOX)','NO PCS /','BOX','NO PCS / BOX',''
+}
+
+# ── shared helpers ────────────────────────────────────────────────────────────
 def extract_brand(name):
     up = name.upper()
+    first = up.split()[0] if up.split() else ''
+    for b in BRANDS:
+        if first == b:
+            return b
     for b in BRANDS:
         if re.search(r'\\b' + re.escape(b) + r'\\b', up):
             return b
     return None
 
-def starts_tile(line):
-    if DIM_TILE_RE.match(line):
-        return True
-    up = line.upper()
-    for b in BRANDS:
-        if up.startswith(b + ' ') or up.startswith(b + '-'):
-            return True
-    return False
+def detect_finish(name):
+    m = FINISH_RE.search(name)
+    return m.group(0).upper() if m else None
 
 def get_tile_images(page, doc):
     images = []
@@ -119,6 +135,109 @@ def get_tile_images(page, doc):
             pass
     images.sort(key=lambda i: i['y'])
     return images
+
+# ── format detection ──────────────────────────────────────────────────────────
+def is_kottakkal_format(text):
+    up = text.upper()
+    return 'BALANCE' in up and 'BOOKING' in up and 'STOCK (BOX)' in up
+
+# ── Kottakkal parser ──────────────────────────────────────────────────────────
+# Columns: NO / DESIGN / ITEM NAME / SIZE / STOCK(BOX) / BOOKING /
+#          BALANCE(BOX)  ← stored as boxCount  / NO PCS/BOX ← pcsCount
+def is_kottakkal_noise(line):
+    return (line.upper() in {h.upper() for h in KOTTAKKAL_HEADER_SET}
+            or NOISE_RE.search(line) is not None)
+
+def parse_kottakkal_text(text):
+    lines       = [l.strip() for l in text.splitlines() if l.strip()]
+    box_indices = [i for i, l in enumerate(lines) if STOCK_BOX_RE.match(l)]
+    items       = []
+
+    for bi, box_idx in enumerate(box_indices):
+        stock_m  = STOCK_BOX_RE.match(lines[box_idx])
+        prev_end = box_indices[bi - 1] + 1 if bi > 0 else 0
+        pre_lines = lines[prev_end:box_idx]
+
+        # Find size line
+        size_val, size_j = None, -1
+        for j, pl in enumerate(pre_lines):
+            if SIZE_RE.match(pl):
+                size_val = pl.upper()
+                size_j   = j
+                break
+        if size_j < 0:
+            continue
+
+        # Build tile name from lines before the size line
+        name_parts = []
+        for nl in pre_lines[:size_j]:
+            if is_kottakkal_noise(nl):
+                continue
+            if NUM_RE.match(nl):
+                continue
+            if '@' in nl:
+                continue
+            # Strip leading design tag e.g. "( NEW )  KAG ..."
+            remaining = DESIGN_TAG_RE.sub('', nl).strip() if DESIGN_TAG_RE.match(nl) else nl
+            if remaining:
+                name_parts.append(remaining)
+
+        tile_name = re.sub(r'\\s+', ' ', ' '.join(name_parts)).strip()
+        if not tile_name:
+            continue
+
+        # Post-data: strip noise/header lines so page breaks don't disrupt counting
+        next_start = box_indices[bi + 1] if bi + 1 < len(box_indices) else len(lines)
+        post_data  = [l for l in lines[box_idx + 1:next_start] if not is_kottakkal_noise(l)]
+
+        # Collect numbers; stop when an integer is followed by a non-numeric line
+        # (that integer is the next item's sequential row number, not a value)
+        post_nums = []
+        for k, pl in enumerate(post_data):
+            if not NUM_RE.match(pl):
+                break
+            if INT_RE.match(pl):
+                next_pl = post_data[k + 1] if k + 1 < len(post_data) else ''
+                if next_pl and not NUM_RE.match(next_pl):
+                    break   # this integer is the next item's row number
+            post_nums.append(float(pl))
+
+        # Structure: [booking?] [balance] [pcs]
+        # last = pcs, second-to-last = balance (what we store as boxCount)
+        if len(post_nums) >= 2:
+            pcs_val     = int(post_nums[-1])
+            balance_val = post_nums[-2]
+        elif len(post_nums) == 1:
+            pcs_val     = int(post_nums[0])
+            balance_val = float(stock_m.group(1))
+        else:
+            pcs_val     = None
+            balance_val = float(stock_m.group(1))
+
+        box_count = int(balance_val) if balance_val == int(balance_val) else balance_val
+
+        items.append({
+            'tileName':  tile_name,
+            'brand':     extract_brand(tile_name),
+            'size':      size_val,
+            'finish':    detect_finish(tile_name),
+            'boxCount':  box_count,
+            'pcsCount':  pcs_val,
+            'imageData': None,
+            'location':  None,
+        })
+
+    return items
+
+# ── Stanza parser ─────────────────────────────────────────────────────────────
+def starts_tile(line):
+    if DIM_TILE_RE.match(line):
+        return True
+    up = line.upper()
+    for b in BRANDS:
+        if up.startswith(b + ' ') or up.startswith(b + '-'):
+            return True
+    return False
 
 def parse_stock_text(text):
     items     = []
@@ -189,6 +308,7 @@ def parse_stock_text(text):
     flush()
     return items
 
+# ── entry point ───────────────────────────────────────────────────────────────
 if __name__ == '__main__':
     path     = sys.argv[1]
     out_path = sys.argv[2]
@@ -207,7 +327,11 @@ if __name__ == '__main__':
     doc.close()
 
     full_text = '\\n'.join(all_text)
-    items     = parse_stock_text(full_text)
+
+    if is_kottakkal_format(full_text):
+        items = parse_kottakkal_text(full_text)
+    else:
+        items = parse_stock_text(full_text)
 
     with open(out_path, 'w') as f:
         json.dump({'items': items, 'text': full_text, 'images': all_images}, f)
@@ -225,7 +349,7 @@ type ParsedItem = {
   location: string | null;
 };
 
-// ── Anthropic client (for fallback when Python parser gets < 10 items) ───────
+// ── Anthropic client (fallback when Python gets < 10 items) ──────────────────
 const anthropic = new Anthropic({
   baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
   apiKey:  process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
@@ -272,12 +396,12 @@ async function parsePdf(pdfBuffer: Buffer): Promise<ParsedItem[]> {
       location:  item.location ? String(item.location).trim() : null,
     })).filter(item => item.tileName.length > 0);
 
-  // Python parser got a good count — use it directly (fast, no AI cost)
+  // Python got a good count — use it directly
   if (pythonItems.length >= 10) {
     return attachImages(pythonItems);
   }
 
-  // Fallback: send raw text to Claude for unusual/complex PDF formats
+  // Fallback: Claude for unusual/complex formats where Python got very few items
   if (!rawText.trim()) return attachImages(pythonItems);
 
   try {
@@ -291,20 +415,19 @@ Extract EVERY tile/product item from the stock list text below.
 
 Return ONLY a valid JSON array (no markdown fences, no explanation).
 Each element must have exactly these fields:
-  "tileName"  : full name including size prefix (e.g. "800X2400 SHREEM ELEGANT WHITE")
+  "tileName"  : full item name
   "brand"     : brand name only or null
   "size"      : dimension string (e.g. "800X2400", "4X2") or null
   "finish"    : finish type (GLOSSY, MATT, FULLBODY, etc.) or null
-  "boxCount"  : integer boxes in stock (0 if out of stock, never null)
-  "pcsCount"  : integer pieces or null
+  "boxCount"  : integer boxes available/in stock (0 if none, never null)
+  "pcsCount"  : integer pieces per box or null
   "location"  : location string or null
 
 Rules:
 - Include ALL items, even those with 0 boxes.
-- Section headers like "SHREEM (1PCS) (FULLBODY)" are NOT items — skip.
-- "(DESPATCH DATE : ...)" lines are NOT items — skip.
-- Adhesive products (e.g. "MIRACLE GUM") ARE valid items — include.
-- Join wrapped tile names with a space.
+- Skip column headers, section headers, footer lines, email addresses.
+- For formats with STOCK/BOOKING/BALANCE columns, use BALANCE as boxCount.
+- Adhesive products (e.g. "MIRACLE GUM") ARE valid items — include them.
 
 PDF text:
 ${rawText}`,
@@ -314,7 +437,6 @@ ${rawText}`,
     const block = message.content[0];
     if (block.type !== "text") return attachImages(pythonItems);
 
-    // Robustly extract JSON array even if Claude adds preamble text
     const jsonMatch = block.text.match(/\[[\s\S]*\]/);
     if (!jsonMatch) return attachImages(pythonItems);
 
@@ -400,7 +522,6 @@ router.post("/", requireAdmin, upload.single("file"), async (req, res) => {
         return;
       }
 
-      // Delete existing stock for this depot and replace
       await db.delete(stockItemsTable).where(eq(stockItemsTable.depotId, depotId));
 
       const toInsert = items.map((item) => ({
