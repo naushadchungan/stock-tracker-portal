@@ -8,6 +8,9 @@ import { authMiddleware } from "./middlewares/authMiddleware";
 
 const app: Express = express();
 
+// Disable ETags so browsers never serve stale API data from HTTP cache
+app.set("etag", false);
+
 app.use(
   pinoHttp({
     logger,
@@ -32,6 +35,12 @@ app.use(cookieParser());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(authMiddleware);
+
+// Prevent browsers from caching API responses — stock data changes after uploads
+app.use("/api", (req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
 
 app.use("/api", router);
 
