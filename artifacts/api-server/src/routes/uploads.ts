@@ -27,13 +27,67 @@ const upload = multer({
   },
 });
 
-// Python script: extracts raw text + tile images from PDF, nothing more.
-// All structured parsing is handled by Claude in parsePdf() below.
+// ── Python script ────────────────────────────────────────────────────────────
+// Extracts raw text + parses all tile items + captures images from the PDF.
+// Returns { items, text, images }.
+// TypeScript uses items directly; falls back to Claude if count is too low.
 const PYTHON_SCRIPT = `
 import fitz
 import json
 import sys
+import re
 import base64
+
+BRANDS = sorted([
+    'L-TILE','ONE TOUCH','SHREEM','MOZILLA','SUZORA','BEETHAS','SPEROX',
+    'ANTONOVA','LIMONZA','LATTO','AARAV','SOLOGRIS','SOLOGRES','MIRACLE',
+    'MILLO','ROCO','AVALTA','TOSSA','NERISS','LORENZO','ALIVE','SCIENTIFICA',
+    'VEGA','ORIK','SKYPE','IYOTA','GRENIC','FRENIS','MURANO','SUNRAJ',
+    'LACTOSE','SOLOSTONE','MARBILANO','STATUS','MILLENNIUM','LIVOLLA',
+    'MONOLITH','NOKEN','PARCOS','LV','ROTON','DIOR',
+    'BLUEGRESS','GEOGRESS','ROCK','DONATO','CORAL','METRO','ROLLZA',
+    'ROLLANCE','ROLLSTAR','CEVIC','KAMRON','SANFORD','SOLOREX','ICOLUX',
+    'LAXVEER','ORIANA','ORINDA','PENGVIN','ROCART','VIZOLI','TORINO',
+    'CAVOS','FUSION','GRAYSTONE','EXOTICA','TAURUS','PASSION','CIBELA',
+    'KAG','SOLO','NEVADA','CRESTO','FORTUNE','NEXUS','OPULUX','KRESTO',
+    'LEMZON','LAVIT','BLUESTONE','NITCO','SOMANY','KAJARIA','JOHNSON',
+    'RAK','SIMPOLO','SIMONZA','AXOR','VELBON','CASA','KIVOS','SPENTAGON',
+    'FRITA','MILLION','LOREM','SUNFIELD','VARG','PASSERO','KSTONE','EVOK',
+    'GRACE','NOVENA','CASAGRES','EUROTILE','ROYALE','ATLAS',
+], key=len, reverse=True)
+
+SECTION_RE  = re.compile(r'\\(\\s*\\d+\\s*PCS\\s*\\)', re.IGNORECASE)
+DIM_TILE_RE = re.compile(r'^\\d{1,4}\\s*[Xx]\\s*\\d{1,4}\\s+\\S')
+NUM_RE      = re.compile(r'^\\d+(\\.\\d+)?\\s*$')
+DIM_ONLY_RE = re.compile(r'^\\(?\\s*\\d{1,4}\\s*[Xx]\\s*\\d{1,4}\\s*\\)?$', re.IGNORECASE)
+DIM_EXTRACT = re.compile(r'(\\d{1,4})\\s*[Xx]\\s*(\\d{1,4})', re.IGNORECASE)
+FINISH_RE   = re.compile(
+    r'\\b(GLOSSY|MATT|MATTE|POLISHED|FULLBODY|FULL\\s*BODY|HIGH\\s*GLOSSY|'
+    r'HI\\s*GLOSSY|NANO|CARVING|COLOUR\\s*BODY|SEMI\\s*HIGH\\s*GLOSSY|'
+    r'PUNCH\\s*MATT|SUPER\\s*HG|ENDLESS|LAPATO|SATIN|SUGAR|RUSTIC)\\b',
+    re.IGNORECASE
+)
+SKIP_RE = re.compile(
+    r'(DESPATCH|DISPATCH|^ITEM\\s+NAME$|^BOX$|^PCS$|^DESIGN$|^STOCK\\s+LIST$|'
+    r'^\\($|^\\)$|^-+$|^=+$)',
+    re.IGNORECASE
+)
+
+def extract_brand(name):
+    up = name.upper()
+    for b in BRANDS:
+        if re.search(r'\\b' + re.escape(b) + r'\\b', up):
+            return b
+    return None
+
+def starts_tile(line):
+    if DIM_TILE_RE.match(line):
+        return True
+    up = line.upper()
+    for b in BRANDS:
+        if up.startswith(b + ' ') or up.startswith(b + '-'):
+            return True
+    return False
 
 def get_tile_images(page, doc):
     images = []
@@ -50,9 +104,7 @@ def get_tile_images(page, doc):
                 continue
             r = rects[0]
             w, h = r.width, r.height
-            if w < 60 or h < 40:
-                continue
-            if w > 300 or h > 300:
+            if w < 60 or h < 40 or w > 300 or h > 300:
                 continue
             if r.x0 < page_w * 0.45:
                 continue
@@ -68,27 +120,100 @@ def get_tile_images(page, doc):
     images.sort(key=lambda i: i['y'])
     return images
 
+def parse_stock_text(text):
+    items     = []
+    cur_name  = None
+    cur_extra = []
+    cur_box   = None
+    cur_pcs   = None
+
+    def flush():
+        nonlocal cur_name, cur_extra, cur_box, cur_pcs
+        if cur_name and cur_box is not None:
+            full   = re.sub(r'\\s+', ' ', cur_name).strip()
+            m      = DIM_EXTRACT.search(full)
+            size   = (m.group(1) + 'X' + m.group(2)).upper() if m else None
+            fm     = FINISH_RE.search(full)
+            finish = fm.group(0).upper() if fm else None
+            if not finish:
+                for ex in cur_extra:
+                    fm = FINISH_RE.search(ex)
+                    if fm:
+                        finish = fm.group(0).upper()
+                        break
+            items.append({
+                'tileName':  full,
+                'brand':     extract_brand(full),
+                'size':      size,
+                'finish':    finish,
+                'boxCount':  cur_box,
+                'pcsCount':  cur_pcs,
+                'imageData': None,
+                'location':  None,
+            })
+        cur_name = None
+        cur_extra.clear()
+        cur_box = cur_pcs = None
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if SKIP_RE.search(line):
+            continue
+        if DIM_ONLY_RE.match(line):
+            continue
+        if SECTION_RE.search(line):
+            flush()
+            continue
+        if NUM_RE.match(line):
+            if cur_name is not None:
+                n = int(float(line))
+                if cur_box is None:
+                    cur_box = n
+                elif cur_pcs is None:
+                    cur_pcs = n
+            continue
+        if starts_tile(line):
+            flush()
+            cur_name  = line
+            cur_extra = []
+            cur_box   = cur_pcs = None
+            continue
+        if cur_name is not None:
+            if line.startswith('('):
+                cur_extra.append(line)
+            elif len(line) > 2 and not NUM_RE.match(line):
+                cur_name += ' ' + line
+
+    flush()
+    return items
+
 if __name__ == '__main__':
     path     = sys.argv[1]
     out_path = sys.argv[2]
     doc      = fitz.open(path)
 
-    pages_text = []
+    all_text   = []
     all_images = []
 
     for page_num in range(doc.page_count):
         page = doc[page_num]
-        pages_text.append(page.get_text('text'))
+        all_text.append(page.get_text('text'))
         for img in get_tile_images(page, doc):
             img['page'] = page_num
             all_images.append(img)
 
     doc.close()
 
+    full_text = '\\n'.join(all_text)
+    items     = parse_stock_text(full_text)
+
     with open(out_path, 'w') as f:
-        json.dump({'text': '\\n'.join(pages_text), 'images': all_images}, f)
+        json.dump({'items': items, 'text': full_text, 'images': all_images}, f)
 `;
 
+// ── Types ────────────────────────────────────────────────────────────────────
 type ParsedItem = {
   tileName: string;
   brand: string | null;
@@ -100,19 +225,22 @@ type ParsedItem = {
   location: string | null;
 };
 
+// ── Anthropic client (for fallback when Python parser gets < 10 items) ───────
 const anthropic = new Anthropic({
   baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
   apiKey:  process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
 });
 
+// ── Main parser ──────────────────────────────────────────────────────────────
 async function parsePdf(pdfBuffer: Buffer): Promise<ParsedItem[]> {
   const tmpId      = randomBytes(8).toString("hex");
   const pdfPath    = join(tmpdir(), `upload_${tmpId}.pdf`);
   const scriptPath = join(tmpdir(), `parse_${tmpId}.py`);
   const outPath    = join(tmpdir(), `result_${tmpId}.json`);
 
-  let rawText  = "";
-  let images:  { b64: string; y: number; page: number }[] = [];
+  let pythonItems: ParsedItem[] = [];
+  let rawText = "";
+  let images: { b64: string; y: number; page: number }[] = [];
 
   try {
     await Promise.all([
@@ -121,8 +249,9 @@ async function parsePdf(pdfBuffer: Buffer): Promise<ParsedItem[]> {
     ]);
     await execAsync(`python3 "${scriptPath}" "${pdfPath}" "${outPath}"`, { timeout: 120_000 });
     const raw = JSON.parse(await readFile(outPath, "utf8"));
-    rawText  = raw.text   ?? "";
-    images   = raw.images ?? [];
+    pythonItems = (raw.items  ?? []) as ParsedItem[];
+    rawText     =  raw.text   ?? "";
+    images      =  raw.images ?? [];
   } finally {
     await Promise.all([
       unlink(pdfPath).catch(() => {}),
@@ -131,65 +260,73 @@ async function parsePdf(pdfBuffer: Buffer): Promise<ParsedItem[]> {
     ]);
   }
 
-  if (!rawText.trim()) return [];
+  const attachImages = (items: ParsedItem[]) =>
+    items.map((item, i) => ({
+      tileName:  String(item.tileName  ?? "").trim(),
+      brand:     item.brand   ? String(item.brand).trim()   : null,
+      size:      item.size    ? String(item.size).trim()    : null,
+      finish:    item.finish  ? String(item.finish).trim()  : null,
+      boxCount:  item.boxCount  != null ? Number(item.boxCount)  : null,
+      pcsCount:  item.pcsCount  != null ? Number(item.pcsCount)  : null,
+      imageData: images[i]?.b64 ?? null,
+      location:  item.location ? String(item.location).trim() : null,
+    })).filter(item => item.tileName.length > 0);
 
-  // Ask Claude to extract every tile item from the raw PDF text
-  const message = await anthropic.messages.create({
-    model:      "claude-sonnet-4-6",
-    max_tokens: 8192,
-    messages: [{
-      role: "user",
-      content: `You are a tile stock data extractor for an Indian tiles warehouse.
+  // Python parser got a good count — use it directly (fast, no AI cost)
+  if (pythonItems.length >= 10) {
+    return attachImages(pythonItems);
+  }
+
+  // Fallback: send raw text to Claude for unusual/complex PDF formats
+  if (!rawText.trim()) return attachImages(pythonItems);
+
+  try {
+    const message = await anthropic.messages.create({
+      model:      "claude-sonnet-4-6",
+      max_tokens: 8192,
+      messages: [{
+        role: "user",
+        content: `You are a tile stock data extractor for an Indian tiles warehouse.
 Extract EVERY tile/product item from the stock list text below.
 
-Return ONLY a valid JSON array — no markdown, no explanation, no code fences.
+Return ONLY a valid JSON array (no markdown fences, no explanation).
 Each element must have exactly these fields:
-  "tileName"  : full name as it appears (include size prefix, e.g. "800X2400 SHREEM ELEGANT WHITE")
-  "brand"     : brand name only (e.g. "SHREEM", "MOZILLA", "SUZORA") or null
-  "size"      : dimension string (e.g. "800X2400", "4X2", "2X2", "300X600") or null
-  "finish"    : finish type (e.g. "GLOSSY", "MATT", "FULLBODY", "HIGH GLOSSY", "NANO") or null
-  "boxCount"  : integer number of boxes (0 if out of stock, never null)
+  "tileName"  : full name including size prefix (e.g. "800X2400 SHREEM ELEGANT WHITE")
+  "brand"     : brand name only or null
+  "size"      : dimension string (e.g. "800X2400", "4X2") or null
+  "finish"    : finish type (GLOSSY, MATT, FULLBODY, etc.) or null
+  "boxCount"  : integer boxes in stock (0 if out of stock, never null)
   "pcsCount"  : integer pieces or null
-  "location"  : location if mentioned or null
+  "location"  : location string or null
 
 Rules:
-- Include ALL items — even those with 0 boxes.
-- Section/category headers like "SHREEM (1PCS) (FULLBODY)" or "SUZORA (2 PCS) (SUPER HG)" are NOT items — skip them.
-- "(DESPATCH DATE : ...)" lines are NOT items — skip them.
-- Adhesive / gum products like "MIRACLE GUM MB-100" ARE valid items — include them.
-- If a tile name wraps across two lines, join them with a space.
-- boxCount and pcsCount must be integers (round if needed).
+- Include ALL items, even those with 0 boxes.
+- Section headers like "SHREEM (1PCS) (FULLBODY)" are NOT items — skip.
+- "(DESPATCH DATE : ...)" lines are NOT items — skip.
+- Adhesive products (e.g. "MIRACLE GUM") ARE valid items — include.
+- Join wrapped tile names with a space.
 
 PDF text:
 ${rawText}`,
-    }],
-  });
+      }],
+    });
 
-  const block = message.content[0];
-  if (block.type !== "text") return [];
+    const block = message.content[0];
+    if (block.type !== "text") return attachImages(pythonItems);
 
-  let parsed: ParsedItem[];
-  try {
-    // Strip accidental markdown fences if Claude adds them
-    const jsonText = block.text.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/```\s*$/i, "");
-    parsed = JSON.parse(jsonText);
-    if (!Array.isArray(parsed)) return [];
+    // Robustly extract JSON array even if Claude adds preamble text
+    const jsonMatch = block.text.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) return attachImages(pythonItems);
+
+    const claudeItems = JSON.parse(jsonMatch[0]) as ParsedItem[];
+    if (!Array.isArray(claudeItems) || claudeItems.length === 0) return attachImages(pythonItems);
+    return attachImages(claudeItems);
   } catch {
-    return [];
+    return attachImages(pythonItems);
   }
-
-  // Attach images in order (Python sorted them top-to-bottom per page)
-  return parsed.map((item, i) => ({
-    tileName:  String(item.tileName ?? "").trim(),
-    brand:     item.brand  ? String(item.brand).trim()  : null,
-    size:      item.size   ? String(item.size).trim()   : null,
-    finish:    item.finish ? String(item.finish).trim() : null,
-    boxCount:  item.boxCount  != null ? Number(item.boxCount)  : null,
-    pcsCount:  item.pcsCount  != null ? Number(item.pcsCount)  : null,
-    imageData: images[i]?.b64 ?? null,
-    location:  item.location ? String(item.location).trim() : null,
-  })).filter(item => item.tileName.length > 0);
 }
+
+// ── Routes ───────────────────────────────────────────────────────────────────
 
 // GET /api/uploads
 router.get("/", async (req, res) => {
@@ -277,7 +414,7 @@ router.post("/", requireAdmin, upload.single("file"), async (req, res) => {
         pcsCount:  item.pcsCount !== null ? String(item.pcsCount) : null,
         stockDate,
         imageData: item.imageData ?? null,
-        location:  item.location ?? null,
+        location:  item.location  ?? null,
       }));
 
       for (let i = 0; i < toInsert.length; i += 100) {
