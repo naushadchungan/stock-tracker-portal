@@ -1,8 +1,15 @@
 import * as React from "react"
 import { Link, useLocation } from "wouter"
 import {
-  Search, UploadCloud, Building2,
-  LayoutDashboard, Menu, LogOut, ShieldCheck, Users, FileSpreadsheet
+  Search,
+  UploadCloud,
+  Building2,
+  LayoutDashboard,
+  Menu,
+  LogOut,
+  ShieldCheck,
+  Users,
+  FileSpreadsheet,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/contexts/auth"
@@ -11,20 +18,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation()
   const [isMobileMenuOpen, setIsMobileMenuOpen] = React.useState(false)
   const { user, isAdmin, logout } = useAuth()
-
-  const baseNavItems = [
-    { href: "/", label: "Dashboard", icon: LayoutDashboard },
-    { href: "/stock", label: "Stock Search", icon: Search },
-    { href: "/template-study", label: "Template Study", icon: FileSpreadsheet },
-    { href: "/depots", label: "Depots", icon: Building2 },
-  ]
-
-  const adminNavItems = [
-    { href: "/upload", label: "Upload Report", icon: UploadCloud },
-    { href: "/users", label: "Manage Users", icon: Users },
-  ]
-
-  const navItems = isAdmin ? [...baseNavItems, ...adminNavItems] : baseNavItems
 
   const displayName = user
     ? [user.firstName, user.lastName].filter(Boolean).join(" ") || user.username || "User"
@@ -39,6 +32,25 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   async function handleLogout() {
     await logout()
+  }
+
+  function NavLink({ href, label, icon: Icon }: { href: string; label: string; icon: React.ElementType }) {
+    const isActive = location === href || (href !== "/" && location.startsWith(href))
+    return (
+      <Link
+        href={href}
+        onClick={() => setIsMobileMenuOpen(false)}
+        className={cn(
+          "flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium transition-colors",
+          isActive
+            ? "bg-primary text-primary-foreground shadow-sm"
+            : "text-foreground hover:bg-muted hover:text-foreground"
+        )}
+      >
+        <Icon className={cn("h-4 w-4", isActive ? "text-primary-foreground" : "text-muted-foreground")} />
+        {label}
+      </Link>
+    )
   }
 
   return (
@@ -71,32 +83,25 @@ export function Layout({ children }: { children: React.ReactNode }) {
           </Link>
         </div>
 
-        <nav className="flex-1 space-y-1 p-4">
+        <nav className="flex-1 space-y-1 p-4 overflow-y-auto">
           <div className="mb-4 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
             Operations
           </div>
-          {navItems.map((item) => {
-            const Icon = item.icon
-            const isActive =
-              location === item.href ||
-              (item.href !== "/" && location.startsWith(item.href))
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={() => setIsMobileMenuOpen(false)}
-                className={cn(
-                  "flex items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium transition-colors",
-                  isActive
-                    ? "bg-primary text-primary-foreground shadow-sm"
-                    : "text-foreground hover:bg-muted hover:text-foreground"
-                )}
-              >
-                <Icon className={cn("h-4 w-4", isActive ? "text-primary-foreground" : "text-muted-foreground")} />
-                {item.label}
-              </Link>
-            )
-          })}
+
+          <NavLink href="/" label="Dashboard" icon={LayoutDashboard} />
+          <NavLink href="/stock" label="Stock Search" icon={Search} />
+          <NavLink href="/template-study" label="Template Study" icon={FileSpreadsheet} />
+          <NavLink href="/depots" label="Depots" icon={Building2} />
+
+          {isAdmin && (
+            <>
+              <div className="my-3 px-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                Admin
+              </div>
+              <NavLink href="/upload" label="Upload Report" icon={UploadCloud} />
+              <NavLink href="/users" label="Manage Users" icon={Users} />
+            </>
+          )}
         </nav>
 
         {/* User info + logout */}
