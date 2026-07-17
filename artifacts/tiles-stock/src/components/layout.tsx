@@ -9,7 +9,6 @@ import {
   LogOut,
   ShieldCheck,
   Users,
-  FileSpreadsheet,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/contexts/auth"
@@ -90,7 +89,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
           <NavLink href="/" label="Dashboard" icon={LayoutDashboard} />
           <NavLink href="/stock" label="Stock Search" icon={Search} />
-          <NavLink href="/template-study" label="Template Study" icon={FileSpreadsheet} />
           <NavLink href="/depots" label="Depots" icon={Building2} />
 
           {isAdmin && (

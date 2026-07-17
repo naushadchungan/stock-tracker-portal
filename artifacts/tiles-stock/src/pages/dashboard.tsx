@@ -7,7 +7,6 @@ import {
   ArrowRight,
   Clock,
   Search,
-  FileSpreadsheet,
 } from "lucide-react"
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -104,12 +103,6 @@ export default function Dashboard() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xl font-bold tracking-tight">Depot Status</h2>
           <div className="hidden md:flex items-center gap-2">
-            <Link href="/template-study">
-              <Button variant="outline" size="sm" className="gap-1.5 border-[#217346] text-[#217346] hover:bg-[#217346]/10">
-                <FileSpreadsheet className="h-4 w-4" />
-                Study Templates
-              </Button>
-            </Link>
             <Link href="/depots">
               <Button variant="outline" size="sm">
                 View All Depots
@@ -170,22 +163,10 @@ export default function Dashboard() {
                       <div className="text-2xl font-bold text-foreground">{depotSum.totalItems.toLocaleString()}</div>
                     </div>
                     
-                    <div className="mt-auto flex flex-col gap-2">
+                    <div className="mt-auto">
                       <Link href={`/stock?depotId=${depotSum.depotId}`} className="w-full">
                         <Button variant="secondary" className="w-full justify-between group">
                           View Stock
-                          <ArrowRight className="h-4 w-4 opacity-70 group-hover:translate-x-1 transition-transform" />
-                        </Button>
-                      </Link>
-                      <Link href={`/template-study?depotId=${depotSum.depotId}`} className="w-full">
-                        <Button
-                          variant="outline"
-                          className="w-full justify-between gap-1.5 border-[#217346]/50 text-[#217346] hover:bg-[#217346]/10 group"
-                        >
-                          <span className="flex items-center gap-1.5">
-                            <FileSpreadsheet className="h-4 w-4" />
-                            Study Template
-                          </span>
                           <ArrowRight className="h-4 w-4 opacity-70 group-hover:translate-x-1 transition-transform" />
                         </Button>
                       </Link>
