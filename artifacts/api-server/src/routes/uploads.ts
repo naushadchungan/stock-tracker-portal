@@ -259,9 +259,7 @@ async function visionBatchWithRetry(
           fullText += event.delta.text;
         }
       }
-      const parsed = (extractJsonArray(fullText) ?? []) as Record<string, unknown>[];
-      console.log(`[vision] batch pages ${batchStart}–${batchStart + imageBlocks.length - 1}: ${parsed.length} items, response length ${fullText.length} chars`);
-      return parsed;
+      return (extractJsonArray(fullText) ?? []) as Record<string, unknown>[];
     } catch (err) {
       if (isOverloadedError(err)) {
         lastErr = err;
@@ -329,6 +327,7 @@ Example (first batch, page 1 = index 1 in batch):
 Include ALL items. Skip cover, section headers, footers, emails, page numbers.`;
 
     const batchItems = await visionBatchWithRetry(imageBlocks, promptText);
+    console.log(`[vision] batch pages ${batchStart}–${batchStart + batch.length - 1}: ${batchItems.length} items`);
 
     // Translate local pageIndex → actual page number, then accumulate
     for (const item of batchItems) {
