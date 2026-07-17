@@ -2,7 +2,7 @@ import * as React from "react"
 import { Link, useLocation } from "wouter"
 import {
   Search, UploadCloud, Building2,
-  LayoutDashboard, Menu, LogOut, ShieldCheck, Users
+  LayoutDashboard, Menu, LogOut, ShieldCheck, Users, FileSpreadsheet
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useAuth } from "@/contexts/auth"
@@ -15,6 +15,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
   const baseNavItems = [
     { href: "/", label: "Dashboard", icon: LayoutDashboard },
     { href: "/stock", label: "Stock Search", icon: Search },
+    { href: "/template-study", label: "Template Study", icon: FileSpreadsheet },
     { href: "/depots", label: "Depots", icon: Building2 },
   ]
 
