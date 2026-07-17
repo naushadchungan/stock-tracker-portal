@@ -200,7 +200,7 @@ function extractJsonArray(text: string): unknown[] | null {
 // Each batch is retried up to MAX_VISION_RETRIES times with exponential backoff
 // on overloaded_error (HTTP 529) responses.
 
-const VISION_BATCH_SIZE = 15;   // pages per Claude Vision call
+const VISION_BATCH_SIZE = 8;    // pages per Claude Vision call (kept small to stay under token budget)
 const MAX_VISION_RETRIES = 4;   // attempts per batch before giving up
 
 type ImageBlock = {
@@ -248,7 +248,7 @@ async function visionBatchWithRetry(
       let fullText = "";
       const stream = await anthropic.messages.stream({
         model:      "claude-sonnet-4-6",
-        max_tokens: 16000,
+        max_tokens: 8192,
         messages: [{
           role:    "user",
           content: [...imageBlocks, { type: "text" as const, text: promptText }],
@@ -259,7 +259,11 @@ async function visionBatchWithRetry(
           fullText += event.delta.text;
         }
       }
-      return (extractJsonArray(fullText) ?? []) as Record<string, unknown>[];
+      const parsed = (extractJsonArray(fullText) ?? []) as Record<string, unknown>[];
+      if (parsed.length === 0) {
+        console.log(`[vision] WARNING: empty parse, response length=${fullText.length}, first 300: ${fullText.slice(0, 300)}`);
+      }
+      return parsed;
     } catch (err) {
       if (isOverloadedError(err)) {
         lastErr = err;
@@ -325,6 +329,9 @@ Example (first batch, page 1 = index 1 in batch):
 [{"tileName":"KRESTO TANISHQE BEIGE","brand":"KRESTO","size":"1200X1800","finish":"GLOSSY","boxCount":0,"pcsCount":null,"location":null,"pageIndex":1}]
 
 Include ALL items. Skip cover, section headers, footers, emails, page numbers.`;
+
+    // Small delay between batches to avoid rate-limiting
+    if (batchStart > 0) await sleep(2_000);
 
     const batchItems = await visionBatchWithRetry(imageBlocks, promptText);
     console.log(`[vision] batch pages ${batchStart}–${batchStart + batch.length - 1}: ${batchItems.length} items`);
