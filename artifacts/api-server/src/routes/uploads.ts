@@ -375,7 +375,13 @@ async function parsePdf(pdfBuffer: Buffer): Promise<ParsedItem[]> {
       writeFile(pdfPath, pdfBuffer),
       writeFile(scriptPath, PYTHON_SCRIPT),
     ]);
-    await execAsync(`python3 "${scriptPath}" "${pdfPath}" "${outPath}"`, { timeout: 120_000 });
+    try {
+      await execAsync(`python3 "${scriptPath}" "${pdfPath}" "${outPath}"`, { timeout: 120_000 });
+    } catch (pyErr: any) {
+      const stderr = pyErr?.stderr ?? "";
+      const stdout = pyErr?.stdout ?? "";
+      throw new Error(`Python script failed.\nSTDERR:\n${stderr}\nSTDOUT:\n${stdout}`);
+    }
     const raw = JSON.parse(await readFile(outPath, "utf8"));
     rawText     = raw.text        ?? "";
     images      = raw.images      ?? [];
