@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "5KUxuYE8xzBRm2GyitZbm"
+uri = "file://workspace.zip"
+type = "unspecified"
+title = "workspace.zip — full source code"
