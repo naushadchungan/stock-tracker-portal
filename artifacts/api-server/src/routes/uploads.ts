@@ -170,7 +170,10 @@ const anthropic = new Anthropic({
 
 // ── Shared JSON extraction helper ─────────────────────────────────────────────
 function extractJsonArray(text: string): unknown[] | null {
-  const jsonMatch = text.match(/\[[\s\S]*\]/);
+  // Normalise Claude's "no-comma newline-delimited" format: }\n{ → },{
+  const normalised = text.replace(/\}\s*\n\s*\{/g, "},\n{");
+
+  const jsonMatch = normalised.match(/\[[\s\S]*\]/);
   if (jsonMatch) {
     try {
       const p = JSON.parse(jsonMatch[0]);
@@ -178,9 +181,9 @@ function extractJsonArray(text: string): unknown[] | null {
     } catch { /* fall through to recovery */ }
   }
   // Truncation recovery: response cut off mid-array — close and parse what we have
-  const arrayStart = text.indexOf("[");
+  const arrayStart = normalised.indexOf("[");
   if (arrayStart === -1) return null;
-  let partial = text.slice(arrayStart);
+  let partial = normalised.slice(arrayStart);
   const lastClose = partial.lastIndexOf("}");
   if (lastClose === -1) return null;
   partial = partial.slice(0, lastClose + 1) + "]";
@@ -219,12 +222,17 @@ function makeImageBlock(pi: { b64: string; mime: string }): ImageBlock {
   };
 }
 
-function isOverloadedError(err: unknown): boolean {
+function isRetryableError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return (
     msg.includes("overloaded_error") ||
     msg.includes("Overloaded") ||
     msg.includes("529") ||
+    msg.includes("terminated") ||
+    msg.includes("other side closed") ||
+    msg.includes("ECONNRESET") ||
+    msg.includes("ETIMEDOUT") ||
+    msg.includes("socket hang up") ||
     (typeof (err as Record<string,unknown>)?.status === "number" && (err as Record<string,unknown>).status === 529)
   );
 }
@@ -265,7 +273,7 @@ async function visionBatchWithRetry(
       }
       return parsed;
     } catch (err) {
-      if (isOverloadedError(err)) {
+      if (isRetryableError(err)) {
         lastErr = err;
         continue; // retry after backoff
       }
