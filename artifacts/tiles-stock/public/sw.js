@@ -1,4 +1,4 @@
-const CACHE = "shine-stock-v1";
+const CACHE = "shine-stock-v2";
 
 // App shell files to cache on install
 const SHELL = [
