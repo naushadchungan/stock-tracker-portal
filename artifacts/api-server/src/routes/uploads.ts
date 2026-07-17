@@ -248,7 +248,7 @@ async function visionBatchWithRetry(
       let fullText = "";
       const stream = await anthropic.messages.stream({
         model:      "claude-sonnet-4-6",
-        max_tokens: 8000,
+        max_tokens: 16000,
         messages: [{
           role:    "user",
           content: [...imageBlocks, { type: "text" as const, text: promptText }],
@@ -259,7 +259,9 @@ async function visionBatchWithRetry(
           fullText += event.delta.text;
         }
       }
-      return (extractJsonArray(fullText) ?? []) as Record<string, unknown>[];
+      const parsed = (extractJsonArray(fullText) ?? []) as Record<string, unknown>[];
+      console.log(`[vision] batch pages ${batchStart}–${batchStart + imageBlocks.length - 1}: ${parsed.length} items, response length ${fullText.length} chars`);
+      return parsed;
     } catch (err) {
       if (isOverloadedError(err)) {
         lastErr = err;
