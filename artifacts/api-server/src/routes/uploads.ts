@@ -143,7 +143,7 @@ async function parsePdf(pdfBuffer: Buffer): Promise<ParsedItem[]> {
       content: `You are a tile stock data extractor for an Indian tiles business.
 Extract EVERY tile/product item from the PDF text below.
 
-The PDF may use one of two layouts:
+The PDF may use one of three layouts — detect which one applies and parse accordingly:
 
 LAYOUT A — Stanza format (dimension-prefixed names, e.g. "800X2400 SHREEM ELEGANT WHITE"):
   • Each item line starts with a dimension (e.g. "600X1200") or brand name.
@@ -157,20 +157,34 @@ LAYOUT B — Columnar table format (headers: NO / DESIGN / ITEM NAME / SIZE / ST
   • pcsCount = NO PCS/BOX column.
   • Design tags like "(NEW)", "(MIXED BATCH)" are NOT part of the tile name — strip them.
 
-Common rules for both layouts:
+LAYOUT C — Three-column visual layout (columns: ITEM | BOX | DESIGN):
+  • The page header has columns labeled ITEM, BOX, DESIGN (and sometimes RATE).
+  • Section headers like "1200X600 GLOSSY", "1200X600 MATT", "300x600", "800X1200", "1800X1200 GLOSSY PATHIRIPALA" etc. are category dividers — NOT items. Skip them.
+  • Sub-depot markers like "MALAPPURAM-CHEMMANIYODE DEPO." indicate a location change for items that follow. Record that location for those items.
+  • Each tile item spans 2–3 lines: line 1 is the size + brand, line 2 is the rest of the name, line 3 may be the finish.
+    Example:
+      "600X1200 LORENZO"
+      "MANGUS WHITE -"          → tileName = "600X1200 LORENZO MANGUS WHITE GLOSSY", size = "600X1200", finish = "GLOSSY"
+      "GLOSSY"
+  • The BOX value (a number like 982.1, or text like "DISPATCHED ON 07-07") appears in the middle column on any of those lines.
+  • If the BOX column contains "DISPATCHED ON ..." or any non-numeric text, boxCount = 0.
+  • Rate values (e.g. "400", "500", "70/PC", "50/PCS") that appear alongside items are pricing — NOT box counts. Ignore them for boxCount.
+  • Pieces-per-box hints like "(5PCS)", "(6PCS)", "(7PCS)" embedded in the tile name indicate pcsCount — extract the number.
+  • Adhesive/grout/epoxy products (EPOXY, TILE ADHESIVE, GEL, GLASS BOND, etc.) at the end of the PDF ARE valid items. Their box count is 0 if no number is shown.
+
+Common rules for all layouts:
   • Return ONLY a valid JSON array — no markdown fences, no explanation, nothing else.
   • Each element must have exactly these fields:
-      "tileName" : full item/tile name as it appears (strip design tags for Layout B)
-      "brand"    : brand name only (e.g. "KAG", "SHREEM", "MOZILLA") or null
+      "tileName" : full assembled tile name (size + brand + model + finish joined with spaces, cleaned up)
+      "brand"    : brand name only (e.g. "KAG", "SHREEM", "MOZILLA", "LORENZO", "AVALTA") or null
       "size"     : dimension string (e.g. "800X2400", "1200X1800", "600X600") or null
-      "finish"   : finish type (GLOSSY, MATT, FULLBODY, NANO, RUSTIC, etc.) or null
-      "boxCount" : integer or decimal number of boxes available (0 if none, never null)
+      "finish"   : finish type (GLOSSY, MATT, FULLBODY, NANO, RUSTIC, CARVING, LAPATO, LAMINATED, etc.) or null
+      "boxCount" : integer or decimal number of boxes available (0 if none or dispatched, never null)
       "pcsCount" : integer pieces per box or null
-      "location" : location if mentioned or null
+      "location" : sub-depot location if a location marker appeared above this item, otherwise null
   • Include ALL items, even those with 0 or negative box counts.
-  • Skip column headers, section headers, footer lines, email addresses, date lines.
-  • Adhesive/gum products (e.g. "MIRACLE GUM") ARE valid items — include them.
-  • If a tile name wraps across two lines, join them with a space.
+  • Skip pure column headers, section/size category headers, footer lines, email addresses, date lines, and page numbers.
+  • Adhesive/gum products ARE valid items — include them.
   • boxCount and pcsCount must be numbers (integers or decimals, not strings).
 
 PDF text:
