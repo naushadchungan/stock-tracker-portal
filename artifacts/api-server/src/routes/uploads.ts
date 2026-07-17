@@ -175,7 +175,9 @@ async function parsePdf(pdfBuffer: Buffer): Promise<ParsedItem[]> {
   if (!rawText.trim()) return [];
 
   // Claude does all structured extraction via Replit AI Integrations
-  const message = await anthropic.messages.create({
+  // Use streaming to avoid proxy timeout on long responses
+  let fullText = "";
+  const stream = await anthropic.messages.stream({
     model:      "claude-sonnet-4-6",
     max_tokens: 8192,
     messages: [{
@@ -228,35 +230,61 @@ LAYOUT C — Three-column visual layout (columns: ITEM | BOX | DESIGN):
   • Square-footage notes like "(20.67 SQFT PER BOX)" are not box counts — skip.
 
 Common rules for all layouts:
-  • Return ONLY a valid JSON array — no markdown fences, no explanation, nothing else.
-  • Each element must have exactly these fields:
+  • Return ONLY a raw JSON array — NO markdown fences, NO explanation, NO pretty-printing.
+  • Output each JSON object on a SINGLE LINE with no internal newlines or extra spaces.
+    Example of correct compact format:
+    [{"tileName":"600X1200 LORENZO MANGUS WHITE GLOSSY","brand":"LORENZO","size":"600X1200","finish":"GLOSSY","boxCount":982.1,"pcsCount":null,"location":null},{"tileName":"...","brand":"...","size":"...","finish":"...","boxCount":0,"pcsCount":null,"location":null}]
+  • Each element must have exactly these fields (no others, in this order):
       "tileName" : full assembled tile name (size + brand + model + finish joined with spaces, cleaned up)
       "brand"    : brand name only (e.g. "KAG", "SHREEM", "MOZILLA", "LORENZO", "AVALTA") or null
       "size"     : dimension string (e.g. "800X2400", "1200X1800", "600X600") or null
       "finish"   : finish type (GLOSSY, MATT, FULLBODY, NANO, RUSTIC, CARVING, LAPATO, LAMINATED, etc.) or null
-      "boxCount" : integer or decimal number of boxes available (0 if none or dispatched, never null)
+      "boxCount" : number — boxes in stock (0 if none or dispatched, never null)
       "pcsCount" : integer pieces per box or null
-      "location" : sub-depot location if a location marker appeared above this item, otherwise null
+      "location" : sub-depot/location name if a location marker appeared above this item, otherwise null
   • Include ALL items, even those with 0 or negative box counts.
-  • Skip pure column headers, section/size category headers, footer lines, email addresses, date lines, and page numbers.
-  • Adhesive/gum products ARE valid items — include them.
-  • boxCount and pcsCount must be numbers (integers or decimals, not strings).
+  • Skip pure column headers, section/size category headers, footer lines, email addresses, date lines, page numbers.
+  • Adhesive/gum products ARE valid items — include them with boxCount 0 if no quantity shown.
+  • boxCount and pcsCount must be numbers (not strings).
 
 PDF text:
 ${rawText}`,
     }],
   });
 
-  const block = message.content[0];
-  if (block.type !== "text") return [];
+  // Collect streamed chunks into a single string
+  for await (const event of stream) {
+    if (event.type === "content_block_delta" && event.delta.type === "text_delta") {
+      fullText += event.delta.text;
+    }
+  }
 
-  // Robustly extract the JSON array even if Claude adds any surrounding text
-  const jsonMatch = block.text.match(/\[[\s\S]*\]/);
-  if (!jsonMatch) return [];
+  // Robustly extract the JSON array even if Claude adds surrounding text or is truncated
+  let rawJson = fullText;
+  const jsonMatch = rawJson.match(/\[[\s\S]*\]/);
+  if (!jsonMatch) {
+    // Truncation recovery: response cut off mid-array — close the array and parse what we have
+    const arrayStart = rawJson.indexOf("[");
+    if (arrayStart === -1) return [];
+    let partial = rawJson.slice(arrayStart);
+    // Remove any trailing incomplete object (ends without closing brace)
+    const lastClose = partial.lastIndexOf("}");
+    if (lastClose === -1) return [];
+    partial = partial.slice(0, lastClose + 1) + "]";
+    try {
+      const p = JSON.parse(partial);
+      if (Array.isArray(p)) rawJson = partial;
+      else return [];
+    } catch {
+      return [];
+    }
+  } else {
+    rawJson = jsonMatch[0];
+  }
 
   let parsed: ParsedItem[];
   try {
-    parsed = JSON.parse(jsonMatch[0]);
+    parsed = JSON.parse(rawJson);
     if (!Array.isArray(parsed)) return [];
   } catch {
     return [];
