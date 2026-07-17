@@ -66,6 +66,46 @@ def get_tile_images(page, doc):
     images.sort(key=lambda i: i['y'])
     return images
 
+def page_to_visual_text(page):
+    """Reconstruct visual layout row-by-row using word X/Y positions.
+    Words in the same visual row are grouped by Y coordinate.
+    Large horizontal gaps between words are represented as multiple spaces
+    so column structure is preserved for downstream parsing.
+    """
+    words = page.get_text('words')  # (x0,y0,x1,y1,word,block,line,word_no)
+    if not words:
+        return page.get_text('text')
+
+    row_tolerance = 5   # px — words within this Y range share a visual row
+    col_gap_min   = 40  # px — gaps larger than this indicate a new column
+
+    rows = {}
+    for w in words:
+        x0, y0, x1, y1, word = w[0], w[1], w[2], w[3], w[4]
+        row_key = round(y0 / row_tolerance) * row_tolerance
+        if row_key not in rows:
+            rows[row_key] = []
+        rows[row_key].append((x0, x1, word))
+
+    lines = []
+    for row_y in sorted(rows.keys()):
+        row_words = sorted(rows[row_y], key=lambda ww: ww[0])
+        parts = []
+        prev_x1 = None
+        for x0, x1, word in row_words:
+            if prev_x1 is not None:
+                gap = x0 - prev_x1
+                if gap > col_gap_min:
+                    # Represent column separator with spaces proportional to gap
+                    parts.append(' ' * max(4, int(gap / 6)))
+                else:
+                    parts.append(' ')   # normal word spacing
+            parts.append(word)
+            prev_x1 = x1
+        lines.append(''.join(parts))
+
+    return '\\n'.join(lines)
+
 if __name__ == '__main__':
     path     = sys.argv[1]
     out_path = sys.argv[2]
@@ -76,7 +116,7 @@ if __name__ == '__main__':
 
     for page_num in range(doc.page_count):
         page = doc[page_num]
-        all_text.append(page.get_text('text'))
+        all_text.append(page_to_visual_text(page))
         for img in get_tile_images(page, doc):
             img['page'] = page_num
             all_images.append(img)
@@ -159,18 +199,33 @@ LAYOUT B — Columnar table format (headers: NO / DESIGN / ITEM NAME / SIZE / ST
 
 LAYOUT C — Three-column visual layout (columns: ITEM | BOX | DESIGN):
   • The page header has columns labeled ITEM, BOX, DESIGN (and sometimes RATE).
-  • Section headers like "1200X600 GLOSSY", "1200X600 MATT", "300x600", "800X1200", "1800X1200 GLOSSY PATHIRIPALA" etc. are category dividers — NOT items. Skip them.
+  • The text is extracted row-by-row based on Y position. Large horizontal gaps in a line indicate column boundaries.
+  • Section/category headers like "1200X600 GLOSSY", "1200X600 MATT", "300x600", "800X1200", "1800X1200 GLOSSY PATHIRIPALA", "1200X600 LAMINATED WOOD", "1200X600 CARVING MATT", "600X600" etc. are dividers — NOT items. Skip them.
   • Sub-depot markers like "MALAPPURAM-CHEMMANIYODE DEPO." indicate a location change for items that follow. Record that location for those items.
-  • Each tile item spans 2–3 lines: line 1 is the size + brand, line 2 is the rest of the name, line 3 may be the finish.
-    Example:
+  • Each tile item occupies a BLOCK of 2–4 consecutive lines:
+      Line 1: size + brand name  (e.g. "600X1200 LORENZO")
+      Line 2: rest of name       (e.g. "MANGUS WHITE -")
+      Line 3: finish             (e.g. "GLOSSY")
+    Join all lines of the block to form the full tileName.
+  • The BOX value (a number like 982.1 or 141, or text like "DISPATCHED ON 07-07") appears on THE SAME LINE as one of the item's lines, separated by large spaces.
+    It can appear on line 1, line 2, or line 3 of the item block — whichever line is vertically centred beside the block.
+    Example extracted text:
       "600X1200 LORENZO"
-      "MANGUS WHITE -"          → tileName = "600X1200 LORENZO MANGUS WHITE GLOSSY", size = "600X1200", finish = "GLOSSY"
+      "MANGUS WHITE -         982.1"   ← boxCount is 982.1 here
       "GLOSSY"
-  • The BOX value (a number like 982.1, or text like "DISPATCHED ON 07-07") appears in the middle column on any of those lines.
-  • If the BOX column contains "DISPATCHED ON ..." or any non-numeric text, boxCount = 0.
-  • Rate values (e.g. "400", "500", "70/PC", "50/PCS") that appear alongside items are pricing — NOT box counts. Ignore them for boxCount.
-  • Pieces-per-box hints like "(5PCS)", "(6PCS)", "(7PCS)" embedded in the tile name indicate pcsCount — extract the number.
-  • Adhesive/grout/epoxy products (EPOXY, TILE ADHESIVE, GEL, GLASS BOND, etc.) at the end of the PDF ARE valid items. Their box count is 0 if no number is shown.
+    Another example:
+      "1200X600 ROCO"                  ← here the number is on line 1
+      "141"
+      "ETRO SMOKE IVORY-"
+      "GLOSSY"
+    In both cases 982.1 / 141 is the boxCount for that item.
+  • A bare number on a line by itself (no item text) belongs to the item block immediately above or below it.
+  • "DISPATCHED ON ..." anywhere in the item block means boxCount = 0.
+  • Rate/price values (e.g. "400", "500", "70/PC", "50/PCS", "34.10 RS/SQ.FT") are in the RATE column (far right) — ignore them for boxCount.
+    Tell apart: a rate value is followed by "/PC", "/PCS", "RS/SQ.FT", or appears alongside an "RS" label; a boxCount is just a plain integer or decimal (e.g. 48, 122.1).
+  • Pieces-per-box hints like "(5PCS)", "(6PCS)", "(7PCS)" embedded in the tile name → pcsCount = that number.
+  • Adhesive/grout/epoxy products (EPOXY, TILE ADHESIVE, GEL, GLASS BOND, etc.) ARE valid items. Their box count is 0 if no number is shown.
+  • Square-footage notes like "(20.67 SQFT PER BOX)" are not box counts — skip.
 
 Common rules for all layouts:
   • Return ONLY a valid JSON array — no markdown fences, no explanation, nothing else.
