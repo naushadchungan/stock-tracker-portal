@@ -137,6 +137,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
             <LogOut className="h-3.5 w-3.5" />
             Sign out
           </button>
+          <p className="mt-3 text-center text-[10px] text-muted-foreground/50 select-none">
+            © {new Date().getFullYear()} Naushad Chungan
+          </p>
         </div>
       </aside>
 
