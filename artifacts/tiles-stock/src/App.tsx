@@ -13,7 +13,6 @@ import UploadReport from '@/pages/upload';
 import DepotsList from '@/pages/depots';
 import LoginPage from '@/pages/login';
 import UsersPage from '@/pages/users';
-import TemplateStudy from '@/pages/template-study';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -50,7 +49,6 @@ function AppRoutes() {
         <Route path="/upload" component={UploadReport} />
         <Route path="/depots" component={DepotsList} />
         <Route path="/users" component={UsersPage} />
-        <Route path="/template-study" component={TemplateStudy} />
         <Route component={NotFound} />
       </Switch>
     </Layout>
