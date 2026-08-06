@@ -9,38 +9,48 @@ export interface TemplateRecord {
   confidence: number;
 }
 
+const FIND_BY_FINGERPRINT_SQL = `
+  SELECT *
+  FROM templates
+  WHERE fingerprint = ?
+  ORDER BY version DESC
+  LIMIT 1
+`;
+
+const SAVE_TEMPLATE_SQL = `
+  INSERT INTO templates
+  (
+    fingerprint,
+    supplier,
+    version,
+    templateJson,
+    confidence
+  )
+  VALUES (?, ?, ?, ?, ?)
+`;
+
+const LIST_TEMPLATES_SQL = `
+  SELECT *
+  FROM templates
+  ORDER BY id DESC
+`;
+
 export class TemplateRepository {
   /**
-   * Find a template by fingerprint.
+   * Find the most recent template for a fingerprint.
    */
   findByFingerprint(fingerprint: string): TemplateRecord | undefined {
-    const stmt = db.prepare(`
-      SELECT *
-      FROM templates
-      WHERE fingerprint = ?
-      ORDER BY version DESC
-      LIMIT 1
-    `);
-
+    const stmt = db.prepare(FIND_BY_FINGERPRINT_SQL);
     return stmt.get(fingerprint) as TemplateRecord | undefined;
   }
 
   /**
-   * Save a new template.
+   * Persists a new template row.
+   *
+   * The template record is append-only to preserve historical versions.
    */
   save(template: TemplateRecord): void {
-    const stmt = db.prepare(`
-      INSERT INTO templates
-      (
-        fingerprint,
-        supplier,
-        version,
-        templateJson,
-        confidence
-      )
-      VALUES (?, ?, ?, ?, ?)
-    `);
-
+    const stmt = db.prepare(SAVE_TEMPLATE_SQL);
     stmt.run(
       template.fingerprint,
       template.supplier ?? null,
@@ -51,15 +61,10 @@ export class TemplateRepository {
   }
 
   /**
-   * List all templates.
+   * List all templates in reverse insertion order.
    */
   list(): TemplateRecord[] {
-    const stmt = db.prepare(`
-      SELECT *
-      FROM templates
-      ORDER BY id DESC
-    `);
-
+    const stmt = db.prepare(LIST_TEMPLATES_SQL);
     return stmt.all() as TemplateRecord[];
   }
 }
