@@ -1,0 +1,1 @@
+export function parseTextPdf(rawText: string): ParsedItem[]

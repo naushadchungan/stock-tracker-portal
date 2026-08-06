@@ -1,49 +1,79 @@
-# See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
+# -------------------------
+# Dependencies
+# -------------------------
+node_modules/
+**/node_modules/
 
-# compiled output
-dist
-tmp
-out-tsc
+# -------------------------
+# Build output
+# -------------------------
+dist/
+build/
+coverage/
+tmp/
+out-tsc/
+
+# -------------------------
+# Environment
+# -------------------------
+.env
+.env.*
+!.env.example
+
+# -------------------------
+# Databases
+# -------------------------
+*.db
+*.sqlite
+*.sqlite3
+
+# -------------------------
+# Uploads
+# -------------------------
+uploads/
+
+# -------------------------
+# Archives
+# -------------------------
+*.zip
+*.7z
+*.rar
+
+# -------------------------
+# ADIE debug files
+# -------------------------
+adie-*.txt
+database_search.txt
+
+# -------------------------
+# Test PDFs
+# -------------------------
+test-pdfs/
+
+# -------------------------
+# IDE
+# -------------------------
+.vscode/
+.idea/
+
+# -------------------------
+# Logs
+# -------------------------
+*.log
+
+# -------------------------
+# TypeScript
+# -------------------------
 *.tsbuildinfo
-.expo
-.expo-shared
 
-# dependencies
-node_modules
-
-# IDEs and editors
-/.idea
-.project
-.classpath
-.c9/
-*.launch
-.settings/
-*.sublime-workspace
-
-# IDE - VSCode
-.vscode/*
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
-
-# misc
-/.sass-cache
-/connect.lock
-/coverage
-/libpeerconnection.log
-npm-debug.log
-yarn-error.log
-testem.log
-/typings
-
-# System Files
-.DS_Store
+# -------------------------
+# OS
+# -------------------------
 Thumbs.db
+.DS_Store
 
-.cursor/rules/nx-rules.mdc
-.github/instructions/nx.instructions.md
-
+# -------------------------
 # Replit
+# -------------------------
 .cache/
 .local/
