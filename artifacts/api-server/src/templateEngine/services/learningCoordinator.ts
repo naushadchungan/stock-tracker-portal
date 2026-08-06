@@ -1,5 +1,7 @@
 import type { DocumentModel } from "../models/documentModel.js";
 import type { LearningResult } from "../models/learningResult.js";
+import type { LearnedTemplateDefinition } from "../models/learnedTemplate.js";
+import type { TemplateValidationResult } from "../validator/templateValidator.js";
 
 import claudeLearningEngine from "./claudeLearningEngine.js";
 import templateMatcher from "./templateMatcher.js";
@@ -13,77 +15,89 @@ export interface LearningCoordinatorResult {
 }
 
 export class LearningCoordinator {
-
+  /**
+   * Process a document for ADIE layout learning.
+   *
+   * If the layout is already known, this returns a short-circuit result.
+   * Otherwise it learns, validates, and persists a new template record.
+   */
   async process(
     rawText: string,
     document: DocumentModel
   ): Promise<LearningCoordinatorResult> {
+    const { found, fingerprint } = this.matchKnownTemplate(document);
 
-    // 1. Check whether ADIE already knows this layout.
-    const match = templateMatcher.match(document);
-
-    if (match.found) {
-
-      console.log(
-        `ADIE: Known template detected (${match.fingerprint})`
-      );
-
+    if (found) {
+      this.logKnownTemplate(fingerprint);
       return {
         status: "known",
-        fingerprint: match.fingerprint,
+        fingerprint,
       };
     }
 
-    console.log(
-      `ADIE: Unknown layout (${match.fingerprint})`
-    );
+    this.logUnknownTemplate(fingerprint);
 
-    // 2. Ask Claude to study the unknown document.
-    const learningResult =
-      await claudeLearningEngine.learn(
-        rawText,
-        document
-      );
+    const learningResult = await this.learnTemplate(rawText, document);
+    const validation = this.validateTemplate(learningResult.template);
 
-    // 3. Validate what Claude taught us.
-    const validation =
-      validateLearnedTemplate(
-        learningResult.template
-      );
-
-    if (!validation.valid) {
-      throw new Error(
-        `ADIE rejected learned template: ${validation.errors.join(
-          "; "
-        )}`
-      );
-    }
-
-    // 4. Only save validated templates.
-    templateRepository.save({
-      fingerprint: match.fingerprint,
-
-      supplier: null,
-
-      version: 1,
-
-      templateJson: JSON.stringify(
-        learningResult.template
-      ),
-
-      confidence:
-        learningResult.confidence,
-    });
-
-    console.log(
-      `ADIE: Template learned and saved (${match.fingerprint})`
-    );
+    this.ensureTemplateIsValid(validation);
+    this.persistLearnedTemplate(fingerprint, learningResult);
 
     return {
       status: "learned",
-      fingerprint: match.fingerprint,
+      fingerprint,
       learningResult,
     };
+  }
+
+  private matchKnownTemplate(document: DocumentModel) {
+    return templateMatcher.match(document);
+  }
+
+  private logKnownTemplate(fingerprint: string) {
+    console.log(`ADIE: Known template detected (${fingerprint})`);
+  }
+
+  private logUnknownTemplate(fingerprint: string) {
+    console.log(`ADIE: Unknown layout (${fingerprint})`);
+  }
+
+  private async learnTemplate(
+    rawText: string,
+    document: DocumentModel
+  ): Promise<LearningResult> {
+    return claudeLearningEngine.learn(rawText, document);
+  }
+
+  private validateTemplate(template: LearnedTemplateDefinition): TemplateValidationResult {
+    return validateLearnedTemplate(template);
+  }
+
+  private ensureTemplateIsValid(validation: TemplateValidationResult) {
+    if (!validation.valid) {
+      throw new Error(`ADIE rejected learned template: ${validation.errors.join("; ")}`);
+    }
+  }
+
+  private buildTemplateRecord(
+    fingerprint: string,
+    learningResult: LearningResult
+  ) {
+    return {
+      fingerprint,
+      supplier: null,
+      version: 1,
+      templateJson: JSON.stringify(learningResult.template),
+      confidence: learningResult.confidence,
+    };
+  }
+
+  private persistLearnedTemplate(
+    fingerprint: string,
+    learningResult: LearningResult
+  ) {
+    templateRepository.save(this.buildTemplateRecord(fingerprint, learningResult));
+    console.log(`ADIE: Template learned and saved (${fingerprint})`);
   }
 }
 
