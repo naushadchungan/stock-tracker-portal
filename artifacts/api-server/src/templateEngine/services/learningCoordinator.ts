@@ -6,6 +6,7 @@ import type { TemplateValidationResult } from "../validator/templateValidator.js
 import claudeLearningEngine from "./claudeLearningEngine.js";
 import templateMatcher from "./templateMatcher.js";
 import templateRepository from "../repository/templateRepository.js";
+import templateStatisticsService from "./templateStatisticsService.js";
 import { validateLearnedTemplate } from "../validator/templateValidator.js";
 
 export interface LearningCoordinatorResult {
@@ -37,16 +38,23 @@ export class LearningCoordinator {
 
     this.logUnknownTemplate(fingerprint);
 
+    // Learn the template from Claude, validate it, persist it, and then
+    // initialize usage statistics so the new template is ready for future
+    // matching and extraction flows.
     const learningResult = await this.learnTemplate(rawText, document);
     const validation = this.validateTemplate(learningResult.template);
 
     this.ensureTemplateIsValid(validation);
-    this.persistLearnedTemplate(fingerprint, learningResult);
+    const savedTemplate = this.persistLearnedTemplate(fingerprint, learningResult);
+    this.initializeTemplateStatistics(fingerprint);
 
     return {
       status: "learned",
       fingerprint,
-      learningResult,
+      learningResult: {
+        ...learningResult,
+        template: savedTemplate,
+      },
     };
   }
 
@@ -95,9 +103,17 @@ export class LearningCoordinator {
   private persistLearnedTemplate(
     fingerprint: string,
     learningResult: LearningResult
-  ) {
-    templateRepository.save(this.buildTemplateRecord(fingerprint, learningResult));
+  ): LearnedTemplateDefinition {
+    const templateRecord = this.buildTemplateRecord(fingerprint, learningResult);
+    templateRepository.save(templateRecord);
     console.log(`ADIE: Template learned and saved (${fingerprint})`);
+    return learningResult.template;
+  }
+
+  private initializeTemplateStatistics(templateId: string) {
+    if (!templateStatisticsService.get(templateId)) {
+      templateStatisticsService.recordExtraction(templateId);
+    }
   }
 }
 
