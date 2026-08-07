@@ -21,6 +21,12 @@ export class TemplateMatcher {
   match(document: DocumentModel): TemplateMatchResult {
     const fingerprint = this.computeFingerprint(document);
     const template = this.lookupTemplate(fingerprint);
+
+    // Keep the matcher document-oriented. Any template JSON parsing is
+    // handled by the repository so the matcher does not need to know how
+    // templates are stored.
+    void this.lookupTemplateDocument(fingerprint);
+
     return this.buildMatchResult(fingerprint, template);
   }
 
@@ -30,6 +36,12 @@ export class TemplateMatcher {
 
   private lookupTemplate(fingerprint: string): TemplateRecord | undefined {
     return templateRepository.findByFingerprint(fingerprint);
+  }
+
+  private lookupTemplateDocument(
+    fingerprint: string
+  ): DocumentModel | undefined {
+    return templateRepository.findTemplateDocumentByFingerprint(fingerprint);
   }
 
   private buildMatchResult(

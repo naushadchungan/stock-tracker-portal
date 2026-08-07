@@ -1,3 +1,4 @@
+import type { DocumentModel } from "../models/documentModel.js";
 import db from "../database/sqlite.js";
 
 export interface TemplateRecord {
@@ -45,6 +46,24 @@ export class TemplateRepository {
   }
 
   /**
+   * Return the stored template as a DocumentModel.
+   *
+   * The repository owns the storage format details, including the JSON
+   * encoding used for persisted templates.
+   */
+  findTemplateDocumentByFingerprint(
+    fingerprint: string
+  ): DocumentModel | undefined {
+    const template = this.findByFingerprint(fingerprint);
+
+    if (!template) {
+      return undefined;
+    }
+
+    return this.parseTemplateDocument(template);
+  }
+
+  /**
    * Persists a new template row.
    *
    * The template record is append-only to preserve historical versions.
@@ -66,6 +85,16 @@ export class TemplateRepository {
   list(): TemplateRecord[] {
     const stmt = db.prepare(LIST_TEMPLATES_SQL);
     return stmt.all() as TemplateRecord[];
+  }
+
+  private parseTemplateDocument(
+    template: TemplateRecord
+  ): DocumentModel | undefined {
+    try {
+      return JSON.parse(template.templateJson) as DocumentModel;
+    } catch {
+      return undefined;
+    }
   }
 }
 
