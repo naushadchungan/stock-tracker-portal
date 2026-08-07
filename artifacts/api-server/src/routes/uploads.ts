@@ -34,6 +34,66 @@ import type { LearnedTileItem } from "../templateEngine/models/learningResult";
 
 const router = Router();
 
+interface UploadProcessingMetadata {
+  parserUsed: string | null;
+  templateMatched: string | null;
+  similarityScore: number | null;
+  confidenceScore: number | null;
+  confidenceDecision: "LOCAL" | "VALIDATE" | "CLAUDE" | null;
+  claudeUsed: boolean | null;
+  processingTimeMs: number | null;
+  validationRequired: boolean | null;
+}
+
+const uploadProcessingMetadata = new Map<number, UploadProcessingMetadata>();
+
+function createUploadProcessingMetadata(): UploadProcessingMetadata {
+  return {
+    parserUsed: null,
+    templateMatched: null,
+    similarityScore: null,
+    confidenceScore: null,
+    confidenceDecision: null,
+    claudeUsed: null,
+    processingTimeMs: null,
+    validationRequired: null,
+  };
+}
+
+function ensureUploadProcessingMetadata(uploadId: number): UploadProcessingMetadata {
+  const existing = uploadProcessingMetadata.get(uploadId);
+  if (existing) {
+    return existing;
+  }
+
+  const metadata = createUploadProcessingMetadata();
+  uploadProcessingMetadata.set(uploadId, metadata);
+  return metadata;
+}
+
+function patchUploadProcessingMetadata(
+  uploadId: number,
+  patch: Partial<UploadProcessingMetadata>
+): void {
+  const metadata = ensureUploadProcessingMetadata(uploadId);
+  Object.assign(metadata, patch);
+  uploadProcessingMetadata.set(uploadId, metadata);
+}
+
+function serializeUploadProcessingMetadata(uploadId: number) {
+  const metadata = uploadProcessingMetadata.get(uploadId) ?? createUploadProcessingMetadata();
+  return {
+    parserUsed: metadata.parserUsed,
+    templateMatched: metadata.templateMatched,
+    similarityScore: metadata.similarityScore,
+    confidenceScore: metadata.confidenceScore,
+    confidenceDecision: metadata.confidenceDecision,
+    claudeUsed: metadata.claudeUsed,
+    processingTimeMs: metadata.processingTimeMs,
+    validationRequired: metadata.validationRequired,
+  };
+}
+
 
 // ============================================================
 // MULTER CONFIGURATION
@@ -246,9 +306,11 @@ async function processUploadFile(
     ) => void;
   }
 ): Promise<void> {
+  const startedAt = Date.now();
+
   try {
     const items =
-      await parsePdf(fileBuffer);
+      await parsePdf(fileBuffer, uploadId);
 
     if (items.length === 0) {
       await db
@@ -285,6 +347,10 @@ async function processUploadFile(
       stockDate
     );
 
+    patchUploadProcessingMetadata(uploadId, {
+      processingTimeMs: Date.now() - startedAt,
+    });
+
     await db
       .update(uploadsTable)
       .set({
@@ -302,6 +368,10 @@ async function processUploadFile(
       { err },
       "PDF processing failed"
     );
+
+    patchUploadProcessingMetadata(uploadId, {
+      processingTimeMs: Date.now() - startedAt,
+    });
 
     await db
       .update(uploadsTable)
@@ -322,7 +392,8 @@ async function processUploadFile(
 // ============================================================
 
 async function parsePdf(
-  pdfBuffer: Buffer
+  pdfBuffer: Buffer,
+  uploadId: number
 ): Promise<ParsedItem[]> {
   const {
     rawText,
@@ -339,7 +410,8 @@ async function parsePdf(
   if (!rawText.trim()) {
     return parseImageOnlyPdf(
       pageImages,
-      images
+      images,
+      uploadId
     );
   }
 
@@ -354,7 +426,8 @@ async function parsePdf(
     return parseUsingLegacyPipeline(
       rawText,
       images,
-      pageImages.length
+      pageImages.length,
+      uploadId
     );
   }
 
@@ -363,21 +436,24 @@ async function parsePdf(
       document,
       rawText,
       images,
-      pageImages.length
+      pageImages.length,
+      uploadId
     );
 
   if (!templateMatch) {
     return parseUsingLegacyPipeline(
       rawText,
       images,
-      pageImages.length
+      pageImages.length,
+      uploadId
     );
   }
 
   const knownTemplateResult =
     await tryKnownTemplateExtraction(
       document,
-      templateMatch
+      templateMatch,
+      uploadId
     );
 
   if (knownTemplateResult) {
@@ -388,7 +464,8 @@ async function parsePdf(
     await tryExistingLocalParser(
       rawText,
       images,
-      pageImages.length
+      pageImages.length,
+      uploadId
     );
 
   if (oldLocalResult) {
@@ -399,7 +476,8 @@ async function parsePdf(
     const learnedResult =
       await tryLearningTemplate(
         rawText,
-        document
+        document,
+        uploadId
       );
 
     if (learnedResult) {
@@ -451,7 +529,8 @@ async function parseImageOnlyPdf(
     b64: string;
     y: number;
     page: number;
-  }[]
+  }[],
+  uploadId: number
 ): Promise<ParsedItem[]> {
   console.log(
     "ADIE: No text layer detected - using Claude Vision"
@@ -464,6 +543,11 @@ async function parseImageOnlyPdf(
 
     return [];
   }
+
+  patchUploadProcessingMetadata(uploadId, {
+    parserUsed: "vision",
+    claudeUsed: false,
+  });
 
   return parseViaVision(
     pageImages,
@@ -504,7 +588,8 @@ async function matchTemplate(
     y: number;
     page: number;
   }[],
-  pageCount: number
+  pageCount: number,
+  uploadId: number
 ): Promise<
   | ReturnType<
       typeof templateMatcher.match
@@ -527,6 +612,12 @@ async function matchTemplate(
       templateMatch.found
     );
 
+    patchUploadProcessingMetadata(uploadId, {
+      templateMatched: templateMatch.template?.fingerprint ?? null,
+      validationRequired: templateMatch.validationRequired ?? null,
+      claudeUsed: false,
+    });
+
     return templateMatch;
   } catch (error) {
     console.error(
@@ -544,7 +635,8 @@ async function tryKnownTemplateExtraction(
   >,
   templateMatch: ReturnType<
     typeof templateMatcher.match
-  >
+  >,
+  uploadId: number
 ): Promise<ParsedItem[] | null> {
   if (
     !templateMatch.found ||
@@ -606,6 +698,13 @@ async function tryKnownTemplateExtraction(
           "ADIE: Using learned local extractor"
         );
 
+        patchUploadProcessingMetadata(uploadId, {
+          parserUsed: "learned-template-extractor",
+          confidenceScore: extraction.confidence,
+          confidenceDecision: "LOCAL",
+          claudeUsed: false,
+        });
+
         console.log(
           "ADIE: Claude API call avoided"
         );
@@ -635,7 +734,8 @@ async function tryLearningTemplate(
   rawText: string,
   document: ReturnType<
     typeof documentBuilder.build
-  >
+  >,
+  uploadId: number
 ): Promise<ParsedItem[] | null> {
   console.log(
     "ADIE: Unknown template - starting Claude learning"
@@ -732,7 +832,8 @@ async function tryExistingLocalParser(
     y: number;
     page: number;
   }[],
-  pageCount: number
+  pageCount: number,
+  uploadId: number
 ): Promise<ParsedItem[] | null> {
   try {
     const oldMatch =
@@ -755,6 +856,11 @@ async function tryExistingLocalParser(
       result.confidence >= 90 &&
       result.items.length > 0
     ) {
+      patchUploadProcessingMetadata(uploadId, {
+        parserUsed: oldMatch.parser.name,
+        claudeUsed: false,
+      });
+
       console.log(
         `Using existing local parser: ${oldMatch.parser.name}`
       );
@@ -793,13 +899,15 @@ async function parseUsingLegacyPipeline(
     y: number;
     page: number;
   }[],
-  pageCount: number
+  pageCount: number,
+  uploadId: number
 ): Promise<ParsedItem[]> {
   const localResult =
     await tryExistingLocalParser(
       rawText,
       images,
-      pageCount
+      pageCount,
+      uploadId
     );
 
   if (localResult) {
@@ -908,7 +1016,10 @@ router.get(
           .limit(limit);
 
       return res.json(
-        rows
+        rows.map((row) => ({
+          ...row,
+          ...serializeUploadProcessingMetadata(row.id),
+        }))
       );
     } catch (err) {
       req.log.error(
@@ -1036,6 +1147,7 @@ router.post(
       ...uploadRecord,
       depotName:
         depot.name,
+      ...serializeUploadProcessingMetadata(uploadRecord.id),
     });
 
 
@@ -1164,9 +1276,10 @@ router.get(
           });
       }
 
-      return res.json(
-        row
-      );
+      return res.json({
+        ...row,
+        ...serializeUploadProcessingMetadata(row.id),
+      });
     } catch (err) {
       req.log.error(
         { err },
