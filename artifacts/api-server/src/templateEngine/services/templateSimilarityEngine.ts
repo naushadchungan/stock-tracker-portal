@@ -1,4 +1,4 @@
-import type { DocumentModel } from "../models/documentModel.js";
+import type { LayoutFeatures } from "../features/layoutFeatureExtractor.js";
 
 export interface SimilarityResult {
   score: number;
@@ -14,17 +14,14 @@ export interface SimilarityResult {
 }
 
 /**
- * Compares two document layouts using a small set of structural signals.
+ * Compares two layout-feature objects using a small set of structural signals.
  *
  * The engine is intentionally reusable and isolated from the existing
  * template matching flow so it can be integrated later without changing
  * current behavior.
  */
 export class TemplateSimilarityEngine {
-  compare(
-    a: DocumentModel,
-    b: DocumentModel
-  ): SimilarityResult {
+  compare(a: LayoutFeatures, b: LayoutFeatures): SimilarityResult {
     const fingerprint = this.compareFingerprint(a, b);
     const sectionHeadings = this.compareSectionHeadings(a, b);
     const columnCount = this.compareColumnCount(a, b);
@@ -57,29 +54,27 @@ export class TemplateSimilarityEngine {
   }
 
   /**
-   * Compares the document fingerprint values when present.
+   * Compares a lightweight signature created from the layout features.
+   * This acts as a high-level fingerprint check for similar layout families.
    */
-  private compareFingerprint(
-    a: DocumentModel,
-    b: DocumentModel
-  ): number {
-    if (!a.fingerprint || !b.fingerprint) {
+  private compareFingerprint(a: LayoutFeatures, b: LayoutFeatures): number {
+    const leftSignature = this.buildSignature(a);
+    const rightSignature = this.buildSignature(b);
+
+    if (!leftSignature || !rightSignature) {
       return 0;
     }
 
-    const same = a.fingerprint === b.fingerprint;
-    return same ? 100 : 0;
+    return leftSignature === rightSignature ? 100 : 0;
   }
 
   /**
-   * Compares the normalized list of section headings.
+   * Compares section headings by measuring overlap between the normalized
+   * heading tokens so shared labels raise the similarity score.
    */
-  private compareSectionHeadings(
-    a: DocumentModel,
-    b: DocumentModel
-  ): number {
-    const left = this.normalizeTokens(a.layout?.sectionHeadings ?? []);
-    const right = this.normalizeTokens(b.layout?.sectionHeadings ?? []);
+  private compareSectionHeadings(a: LayoutFeatures, b: LayoutFeatures): number {
+    const left = this.normalizeTokens(a.headingPattern);
+    const right = this.normalizeTokens(b.headingPattern);
 
     if (left.length === 0 && right.length === 0) {
       return 0;
@@ -96,14 +91,12 @@ export class TemplateSimilarityEngine {
   }
 
   /**
-   * Compares the number of columns in the layout.
+   * Compares the reported column count exactly, because a layout is only
+   * structurally similar when both feature sets describe the same column count.
    */
-  private compareColumnCount(
-    a: DocumentModel,
-    b: DocumentModel
-  ): number {
-    const left = a.layout?.columnCount ?? 0;
-    const right = b.layout?.columnCount ?? 0;
+  private compareColumnCount(a: LayoutFeatures, b: LayoutFeatures): number {
+    const left = a.columnCount ?? 0;
+    const right = b.columnCount ?? 0;
 
     if (left === 0 || right === 0) {
       return 0;
@@ -113,14 +106,12 @@ export class TemplateSimilarityEngine {
   }
 
   /**
-   * Compares the average line length across the document blocks.
+   * Compares average line length using a tolerance-based score, which keeps
+   * the original behavior of rewarding near-equal values while penalizing gaps.
    */
-  private compareAverageLineLength(
-    a: DocumentModel,
-    b: DocumentModel
-  ): number {
-    const left = this.getAverageLineLength(a);
-    const right = this.getAverageLineLength(b);
+  private compareAverageLineLength(a: LayoutFeatures, b: LayoutFeatures): number {
+    const left = a.averageLineLength ?? 0;
+    const right = b.averageLineLength ?? 0;
 
     if (left === 0 || right === 0) {
       return 0;
@@ -132,37 +123,48 @@ export class TemplateSimilarityEngine {
   }
 
   /**
-   * Compares recurring stock row patterns, such as stock values or numeric clusters.
+   * Compares stock row patterns by looking at how much of the feature list
+   * overlaps between the two layouts, which preserves the prior intent of
+   * matching recurring stock-like structure.
    */
-  private compareStockRowPattern(
-    a: DocumentModel,
-    b: DocumentModel
-  ): number {
-    const left = this.extractStockRowPattern(a);
-    const right = this.extractStockRowPattern(b);
+  private compareStockRowPattern(a: LayoutFeatures, b: LayoutFeatures): number {
+    const left = this.normalizeTokens(a.stockRowPattern);
+    const right = this.normalizeTokens(b.stockRowPattern);
 
-    if (!left || !right) {
+    if (left.length === 0 || right.length === 0) {
       return 0;
     }
 
-    return left === right ? 100 : 0;
+    const intersection = this.countIntersection(left, right);
+    const union = new Set([...left, ...right]).size;
+
+    if (union === 0) {
+      return 0;
+    }
+
+    return Math.round((intersection / union) * 100);
   }
 
   /**
-   * Compares size-pattern frequency by looking at common size-like tokens.
+   * Compares size-pattern features with the same overlap-based approach,
+   * allowing shared size tokens to increase the similarity signal.
    */
-  private compareSizePattern(
-    a: DocumentModel,
-    b: DocumentModel
-  ): number {
-    const left = this.extractSizePattern(a);
-    const right = this.extractSizePattern(b);
+  private compareSizePattern(a: LayoutFeatures, b: LayoutFeatures): number {
+    const left = this.normalizeTokens(a.sizePattern);
+    const right = this.normalizeTokens(b.sizePattern);
 
-    if (!left || !right) {
+    if (left.length === 0 || right.length === 0) {
       return 0;
     }
 
-    return left === right ? 100 : 0;
+    const intersection = this.countIntersection(left, right);
+    const union = new Set([...left, ...right]).size;
+
+    if (union === 0) {
+      return 0;
+    }
+
+    return Math.round((intersection / union) * 100);
   }
 
   private normalizeTokens(values: string[]): string[] {
@@ -176,53 +178,19 @@ export class TemplateSimilarityEngine {
     return left.filter((value) => rightSet.has(value)).length;
   }
 
-  private getAverageLineLength(document: DocumentModel): number {
-    const blocks = document.blocks ?? [];
-
-    if (blocks.length === 0) {
-      return 0;
-    }
-
-    const lengths = blocks
-      .map((block) => block.text?.trim().length ?? 0)
-      .filter((length) => length > 0);
-
-    if (lengths.length === 0) {
-      return 0;
-    }
-
-    const total = lengths.reduce((sum, length) => sum + length, 0);
-    return Math.round(total / lengths.length);
-  }
-
-  private extractStockRowPattern(document: DocumentModel): string | null {
-    const blocks = document.blocks ?? [];
-
-    const matched = blocks
-      .map((block) => block.text?.trim() ?? "")
-      .filter(Boolean)
-      .find((text) => /\b\d{1,4}\b/.test(text) && /\b\d{1,4}\b/.test(text));
-
-    if (!matched) {
-      return null;
-    }
-
-    return matched.replace(/\s+/g, " ").trim();
-  }
-
-  private extractSizePattern(document: DocumentModel): string | null {
-    const blocks = document.blocks ?? [];
-
-    const sizes = blocks
-      .map((block) => block.text?.trim() ?? "")
-      .filter(Boolean)
-      .flatMap((text) => text.match(/\b\d{1,4}\s*[Xx×]\s*\d{1,4}\b/g) ?? []);
-
-    if (sizes.length === 0) {
-      return null;
-    }
-
-    return sizes.slice(0, 5).join("|");
+  private buildSignature(features: LayoutFeatures): string {
+    return [
+      features.columnCount,
+      features.sectionCount,
+      features.averageLineLength,
+      features.averageWordsPerLine,
+      features.headingPattern.join("|"),
+      features.stockRowPattern.join("|"),
+      features.sizePattern.join("|"),
+      features.dispatchDatePattern.join("|"),
+      features.finishPattern.join("|"),
+      features.brandPattern.join("|"),
+    ].join("::");
   }
 }
 
