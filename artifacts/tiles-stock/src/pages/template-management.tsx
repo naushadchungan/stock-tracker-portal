@@ -19,6 +19,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip"
 
 interface TemplateRow {
   id: number
@@ -75,6 +76,8 @@ const sampleTemplates: TemplateRow[] = [
 type SortKey = "name" | "matchCount" | "lastUsed"
 type SortDirection = "asc" | "desc"
 
+const backendIntegrationPending = "Backend integration pending"
+
 export default function TemplateManagementPage() {
   const [search, setSearch] = useState("")
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
@@ -120,6 +123,7 @@ export default function TemplateManagementPage() {
     setSortDirection("asc")
   }
 
+  // TODO: Replace the mock template rows with real backend data once a template list API is available.
   return (
     <div className="max-w-6xl mx-auto space-y-6 animate-in fade-in duration-500">
       <div>
@@ -192,27 +196,36 @@ export default function TemplateManagementPage() {
                       </span>
                     </TableCell>
                     <TableCell className="text-right">
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="sm" className="h-8 w-8 p-0">
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem>
-                            <Eye className="mr-2 h-4 w-4" /> View
-                          </DropdownMenuItem>
-                          <DropdownMenuItem>
-                            <RefreshCw className="mr-2 h-4 w-4" /> Relearn
-                          </DropdownMenuItem>
-                          <DropdownMenuItem>
-                            <Ban className="mr-2 h-4 w-4" /> Disable
-                          </DropdownMenuItem>
-                          <DropdownMenuItem className="text-destructive">
-                            <Trash2 className="mr-2 h-4 w-4" /> Delete
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                      <TooltipProvider>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <span>
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button variant="ghost" size="sm" className="h-8 w-8 p-0" disabled>
+                                    <MoreHorizontal className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>{backendIntegrationPending}</TooltipContent>
+                              </Tooltip>
+                            </span>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem disabled>
+                              <Eye className="mr-2 h-4 w-4" /> View
+                            </DropdownMenuItem>
+                            <DropdownMenuItem disabled>
+                              <RefreshCw className="mr-2 h-4 w-4" /> Relearn
+                            </DropdownMenuItem>
+                            <DropdownMenuItem disabled>
+                              <Ban className="mr-2 h-4 w-4" /> Disable
+                            </DropdownMenuItem>
+                            <DropdownMenuItem disabled className="text-destructive">
+                              <Trash2 className="mr-2 h-4 w-4" /> Delete
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </TooltipProvider>
                     </TableCell>
                   </TableRow>
                 ))}
