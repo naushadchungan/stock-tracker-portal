@@ -39,6 +39,13 @@ type DepotRowState = {
   status: "idle" | "uploading" | "processing" | "done" | "failed"
   itemsExtracted?: number
   errorMessage?: string
+  processingTimeMs?: number
+  parserUsed?: string
+  templateMatched?: string
+  similarityScore?: number
+  confidenceScore?: number
+  claudeUsed?: boolean
+  validationRequired?: boolean
 }
 
 export default function UploadReport() {
@@ -150,7 +157,19 @@ export default function UploadReport() {
 
   const resetAll = () => {
     setRows((prev) => prev.map((r) => ({
-      ...r, file: null, uploadId: null, status: "idle", itemsExtracted: undefined, errorMessage: undefined,
+      ...r,
+      file: null,
+      uploadId: null,
+      status: "idle",
+      itemsExtracted: undefined,
+      errorMessage: undefined,
+      processingTimeMs: undefined,
+      parserUsed: undefined,
+      templateMatched: undefined,
+      similarityScore: undefined,
+      confidenceScore: undefined,
+      claudeUsed: undefined,
+      validationRequired: undefined,
     })))
     fileInputRefs.current.forEach((ref) => { ref.value = "" })
   }
@@ -228,88 +247,116 @@ export default function UploadReport() {
             <div className="divide-y divide-border border rounded-lg overflow-hidden">
               {rows.map((row) => {
                 const busy = row.status === "uploading" || row.status === "processing"
+                const showSummary = row.status === "done"
+                const summaryItems = [
+                  { label: "Upload status", value: row.status === "done" ? "Completed" : "Not Available" },
+                  { label: "Processing time", value: row.processingTimeMs != null ? `${row.processingTimeMs} ms` : "Not Available" },
+                  { label: "Items extracted", value: row.itemsExtracted != null ? `${row.itemsExtracted}` : "Not Available" },
+                  { label: "Parser used", value: row.parserUsed || "Not Available" },
+                  { label: "Template matched", value: row.templateMatched || "Not Available" },
+                  { label: "Similarity score", value: row.similarityScore != null ? `${row.similarityScore}` : "Not Available" },
+                  { label: "Confidence score", value: row.confidenceScore != null ? `${row.confidenceScore}` : "Not Available" },
+                  { label: "Claude used", value: row.claudeUsed == null ? "Not Available" : row.claudeUsed ? "Yes" : "No" },
+                  { label: "Validation required", value: row.validationRequired == null ? "Not Available" : row.validationRequired ? "Yes" : "No" },
+                ]
+
                 return (
                   <div
                     key={row.depotId}
-                    className={`flex items-center gap-3 px-4 py-3 transition-colors ${
+                    className={`transition-colors ${
                       row.status === "done" ? "bg-emerald-50/60 dark:bg-emerald-950/20" :
                       row.status === "failed" ? "bg-destructive/5" :
                       busy ? "bg-primary/5" : "bg-card hover:bg-muted/30"
                     }`}
                   >
-                    {/* Status icon */}
-                    <div className="w-5 shrink-0 flex justify-center">
-                      {row.status === "done" ? (
-                        <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                      ) : row.status === "failed" ? (
-                        <AlertCircle className="h-4 w-4 text-destructive" />
-                      ) : busy ? (
-                        <Loader2 className="h-4 w-4 text-primary animate-spin" />
-                      ) : (
-                        <Building2 className="h-4 w-4 text-muted-foreground" />
-                      )}
-                    </div>
-
-                    {/* Depot name */}
-                    <span className="w-40 shrink-0 text-sm font-medium text-foreground truncate">{row.depotName}</span>
-
-                    {/* File picker / status */}
-                    <div className="flex-1 min-w-0">
-                      {row.status === "done" ? (
-                        <span className="text-xs text-emerald-600 font-medium">
-                          ✓ {row.itemsExtracted} items extracted
-                        </span>
-                      ) : row.status === "failed" ? (
-                        <span className="text-xs text-destructive truncate">{row.errorMessage}</span>
-                      ) : busy ? (
-                        <span className="text-xs text-primary">
-                          {row.status === "uploading" ? "Uploading…" : "Extracting data…"}
-                        </span>
-                      ) : row.file ? (
-                        <div className="flex items-center gap-2">
-                          <File className="h-3.5 w-3.5 text-primary shrink-0" />
-                          <span className="text-xs text-foreground truncate">{row.file.name}</span>
-                          <span className="text-xs text-muted-foreground shrink-0">
-                            ({(row.file.size / 1024 / 1024).toFixed(1)} MB)
-                          </span>
-                        </div>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">No file selected</span>
-                      )}
-                    </div>
-
-                    {/* Action button */}
-                    {!busy && row.status !== "done" && (
-                      <>
-                        <input
-                          type="file"
-                          accept="application/pdf"
-                          className="hidden"
-                          ref={(el) => { if (el) fileInputRefs.current.set(row.depotId, el) }}
-                          onChange={(e) => handleFileChange(row.depotId, e)}
-                        />
-                        {row.file ? (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 px-2 text-muted-foreground hover:text-destructive shrink-0"
-                            onClick={() => clearFile(row.depotId)}
-                          >
-                            <X className="h-3.5 w-3.5" />
-                          </Button>
+                    <div className="flex items-center gap-3 px-4 py-3">
+                      {/* Status icon */}
+                      <div className="w-5 shrink-0 flex justify-center">
+                        {row.status === "done" ? (
+                          <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                        ) : row.status === "failed" ? (
+                          <AlertCircle className="h-4 w-4 text-destructive" />
+                        ) : busy ? (
+                          <Loader2 className="h-4 w-4 text-primary animate-spin" />
                         ) : (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-7 text-xs shrink-0"
-                            onClick={() => fileInputRefs.current.get(row.depotId)?.click()}
-                          >
-                            Choose PDF
-                          </Button>
+                          <Building2 className="h-4 w-4 text-muted-foreground" />
                         )}
-                      </>
+                      </div>
+
+                      {/* Depot name */}
+                      <span className="w-40 shrink-0 text-sm font-medium text-foreground truncate">{row.depotName}</span>
+
+                      {/* File picker / status */}
+                      <div className="flex-1 min-w-0">
+                        {row.status === "done" ? (
+                          <span className="text-xs text-emerald-600 font-medium">
+                            ✓ {row.itemsExtracted} items extracted
+                          </span>
+                        ) : row.status === "failed" ? (
+                          <span className="text-xs text-destructive truncate">{row.errorMessage}</span>
+                        ) : busy ? (
+                          <span className="text-xs text-primary">
+                            {row.status === "uploading" ? "Uploading…" : "Extracting data…"}
+                          </span>
+                        ) : row.file ? (
+                          <div className="flex items-center gap-2">
+                            <File className="h-3.5 w-3.5 text-primary shrink-0" />
+                            <span className="text-xs text-foreground truncate">{row.file.name}</span>
+                            <span className="text-xs text-muted-foreground shrink-0">
+                              ({(row.file.size / 1024 / 1024).toFixed(1)} MB)
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">No file selected</span>
+                        )}
+                      </div>
+
+                      {/* Action button */}
+                      {!busy && row.status !== "done" && (
+                        <>
+                          <input
+                            type="file"
+                            accept="application/pdf"
+                            className="hidden"
+                            ref={(el) => { if (el) fileInputRefs.current.set(row.depotId, el) }}
+                            onChange={(e) => handleFileChange(row.depotId, e)}
+                          />
+                          {row.file ? (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 px-2 text-muted-foreground hover:text-destructive shrink-0"
+                              onClick={() => clearFile(row.depotId)}
+                            >
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          ) : (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs shrink-0"
+                              onClick={() => fileInputRefs.current.get(row.depotId)?.click()}
+                            >
+                              Choose PDF
+                            </Button>
+                          )}
+                        </>
+                      )}
+                    </div>
+
+                    {showSummary && (
+                      <div className="mx-4 mb-3 rounded-lg border border-emerald-200 bg-background/80 p-3">
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          {summaryItems.map((item) => (
+                            <div key={item.label} className="text-sm">
+                              <span className="text-muted-foreground">{item.label}: </span>
+                              <span className="font-medium text-foreground">{item.value}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     )}
                   </div>
                 )
