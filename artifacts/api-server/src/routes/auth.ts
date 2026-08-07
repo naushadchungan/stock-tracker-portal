@@ -10,6 +10,25 @@ import {
 } from '../lib/auth';
 import { requireAuth } from '../middlewares/requireAuth';
 
+type AuthUserShape = {
+  id: number;
+  username: string;
+  email: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  profileImageUrl: string | null;
+  role: string;
+};
+
+declare global {
+  namespace Express {
+    interface Request {
+      user?: AuthUserShape;
+      isAuthenticated(): boolean;
+    }
+  }
+}
+
 const router: IRouter = Router();
 
 // GET /api/auth/user — return the current session user (or null)

@@ -4,10 +4,16 @@ import { stockItemsTable, depotsTable, uploadsTable } from "@workspace/db";
 import { eq, sql, ilike, and, desc, count, asc, isNotNull } from "drizzle-orm";
 import { requireAdmin } from "../middlewares/requireAuth";
 
+type StockRequest = {
+  log: {
+    error: (fields: Record<string, unknown>, message: string) => void;
+  };
+};
+
 const router = Router();
 
 // GET /api/stock
-router.get("/", async (req, res) => {
+router.get("/", async (req: StockRequest & any, res) => {
   try {
     const search = (req.query.search as string) || "";
     const depotId = req.query.depotId ? parseInt(req.query.depotId as string, 10) : null;
@@ -64,7 +70,7 @@ router.get("/", async (req, res) => {
 });
 
 // GET /api/stock/summary
-router.get("/summary", async (req, res) => {
+router.get("/summary", async (req: StockRequest & any, res) => {
   try {
     const lastUploadSq = db
       .select({
@@ -97,7 +103,7 @@ router.get("/summary", async (req, res) => {
 });
 
 // GET /api/stock/filters
-router.get("/filters", async (req, res) => {
+router.get("/filters", async (req: StockRequest & any, res) => {
   try {
     const depotId = req.query.depotId ? parseInt(req.query.depotId as string, 10) : null;
     const depotCondition = depotId && !isNaN(depotId) ? eq(stockItemsTable.depotId, depotId) : undefined;
@@ -123,7 +129,7 @@ router.get("/filters", async (req, res) => {
 });
 
 // POST /api/stock/import-excel  — admin: replace depot stock from a corrected Excel (sent as JSON)
-router.post("/import-excel", requireAdmin, async (req, res) => {
+router.post("/import-excel", requireAdmin, async (req: StockRequest & any, res) => {
   try {
     const { depotId, stockDate, items } = req.body as {
       depotId: number
@@ -184,7 +190,7 @@ router.post("/import-excel", requireAdmin, async (req, res) => {
 })
 
 // GET /api/stock/:id/image  — serves raw image bytes from stored base64
-router.get("/:id/image", async (req, res) => {
+router.get("/:id/image", async (req: StockRequest & any, res) => {
   try {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) return res.status(400).json({ error: "Invalid id" });

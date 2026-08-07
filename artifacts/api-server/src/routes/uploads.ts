@@ -34,6 +34,12 @@ import type { LearnedTileItem } from "../templateEngine/models/learningResult";
 
 const router = Router();
 
+type UploadRouteRequest = {
+  log: {
+    error: (fields: Record<string, unknown>, message: string) => void;
+  };
+};
+
 interface UploadProcessingMetadata {
   parserUsed: string | null;
   templateMatched: string | null;
@@ -255,7 +261,10 @@ async function persistParsedStockItems(
   depotId: number,
   uploadId: number,
   stockDate: string | null,
-  tx?: any
+  tx?: {
+    insert: typeof db.insert;
+    delete: typeof db.delete;
+  }
 ): Promise<void> {
   const toInsert = items.map(
     (item) => ({
@@ -943,7 +952,7 @@ async function parseUsingLegacyPipeline(
 router.get(
   "/",
   async (
-    req,
+    req: UploadRouteRequest & any,
     res
   ) => {
     try {
@@ -1061,7 +1070,7 @@ router.post(
   upload.single("file"),
 
   async (
-    req,
+    req: UploadRouteRequest & any,
     res
   ) => {
     if (!req.file) {
@@ -1197,7 +1206,7 @@ router.post(
 router.get(
   "/:id",
   async (
-    req,
+    req: UploadRouteRequest & any,
     res
   ) => {
     try {
