@@ -24,6 +24,10 @@ export interface TemplateStatisticsStore {
 export class TemplateStatisticsService implements TemplateStatisticsStore {
   private readonly statisticsByTemplateId = new Map<string, TemplateStatistics>();
 
+  /**
+   * Return existing statistics for a template when available.
+   */
+
   get(templateId: string): TemplateStatistics | undefined {
     return this.statisticsByTemplateId.get(templateId);
   }

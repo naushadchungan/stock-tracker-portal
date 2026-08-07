@@ -46,7 +46,10 @@ export class LearningCoordinator {
 
     this.ensureTemplateIsValid(validation);
     const savedTemplate = this.persistLearnedTemplate(fingerprint, learningResult);
+    // Initialize statistics for a successfully learned template and record the
+    // extraction event once the save completed.
     this.initializeTemplateStatistics(fingerprint);
+    templateStatisticsService.recordExtraction(fingerprint);
 
     return {
       status: "learned",

@@ -6,6 +6,7 @@ import templateRepository, {
 } from "../repository/templateRepository.js";
 import templateConfidenceEngine from "./templateConfidenceEngine.js";
 import templateSimilarityEngine from "./templateSimilarityEngine.js";
+import templateStatisticsService from "./templateStatisticsService.js";
 
 export interface TemplateMatchResult {
   fingerprint: string;
@@ -30,7 +31,9 @@ export class TemplateMatcher {
     const template = this.lookupTemplate(fingerprint);
     if (template) {
       // An exact match is treated as the strongest possible signal and returns
-      // immediately as a local match.
+      // immediately as a local match. The statistics service is updated here so
+      // successful local matches contribute to template usage history.
+      templateStatisticsService.recordMatch(fingerprint, 100);
       return this.buildMatchResult(fingerprint, template, false);
     }
 
@@ -56,6 +59,9 @@ export class TemplateMatcher {
     });
 
     if (confidence.decision === "LOCAL" || confidence.decision === "VALIDATE") {
+      // Statistics are updated for successful fallback matches as well, using
+      // the similarity score as the confidence signal for the metrics.
+      templateStatisticsService.recordMatch(bestMatch.template.fingerprint, bestMatch.similarityScore);
       return this.buildMatchResult(
         fingerprint,
         bestMatch.template,
