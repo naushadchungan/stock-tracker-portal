@@ -4,12 +4,14 @@ import layoutFeatureExtractor from "../features/layoutFeatureExtractor.js";
 import templateRepository, {
   TemplateRecord,
 } from "../repository/templateRepository.js";
+import templateConfidenceEngine from "./templateConfidenceEngine.js";
 import templateSimilarityEngine from "./templateSimilarityEngine.js";
 
 export interface TemplateMatchResult {
   fingerprint: string;
   found: boolean;
   template?: TemplateRecord;
+  validationRequired?: boolean;
 }
 
 export class TemplateMatcher {
@@ -22,21 +24,46 @@ export class TemplateMatcher {
    * similarity comparison is used as a fallback.
    */
   match(document: DocumentModel): TemplateMatchResult {
-    // Build layout features once from the incoming document so the same
-    // feature object can be reused across the exact-match and fallback paths.
-    const incomingLayoutFeatures = this.extractLayoutFeatures(document);
     const fingerprint = this.computeFingerprint(document);
 
-    // Preserve the existing exact fingerprint lookup first.
+    // Preserve the existing exact fingerprint lookup exactly as before.
     const template = this.lookupTemplate(fingerprint);
     if (template) {
-      return this.buildMatchResult(fingerprint, template);
+      // An exact match is treated as the strongest possible signal and returns
+      // immediately as a local match.
+      return this.buildMatchResult(fingerprint, template, false);
     }
 
-    // When the exact fingerprint does not resolve, use the repository-backed
-    // template documents to compare layout features with the new engine.
-    const similarTemplate = this.findSimilarTemplate(incomingLayoutFeatures);
-    return this.buildMatchResult(fingerprint, similarTemplate);
+    // When the exact fingerprint path fails, build layout features once from
+    // the incoming document and use them for the best-template fallback path.
+    const incomingLayoutFeatures = this.extractLayoutFeatures(document);
+    const bestMatch = this.findBestMatchingTemplate(incomingLayoutFeatures);
+
+    if (!bestMatch) {
+      // When no suitable template is found, preserve the current no-match behavior.
+      return this.buildMatchResult(fingerprint, undefined, false);
+    }
+
+    // Use the confidence engine to replace the previous fixed 90% threshold.
+    // LOCAL and VALIDATE both return the matched template, while CLAUDE behaves
+    // like the existing no-match result.
+    const confidence = templateConfidenceEngine.calculate({
+      exactMatchFound: false,
+      similarityScore: bestMatch.similarityScore,
+      templateAge: 0,
+      templateUsageCount: 0,
+      extractorConfidence: undefined,
+    });
+
+    if (confidence.decision === "LOCAL" || confidence.decision === "VALIDATE") {
+      return this.buildMatchResult(
+        fingerprint,
+        bestMatch.template,
+        confidence.decision === "VALIDATE"
+      );
+    }
+
+    return this.buildMatchResult(fingerprint, undefined, false);
   }
 
   private computeFingerprint(document: DocumentModel): string {
@@ -57,11 +84,15 @@ export class TemplateMatcher {
     return templateRepository.findTemplateDocumentByFingerprint(fingerprint);
   }
 
-  private findSimilarTemplate(
+  private findBestMatchingTemplate(
     incomingLayoutFeatures: ReturnType<TemplateMatcher["extractLayoutFeatures"]>
-  ): TemplateRecord | undefined {
+  ): { template: TemplateRecord; similarityScore: number } | undefined {
     const storedTemplates = templateRepository.list();
+    let bestMatch: { template: TemplateRecord; similarityScore: number } | undefined;
 
+    // Compare the incoming document features against every stored template and
+    // keep only the highest-scoring candidate so the confidence engine decides
+    // whether that candidate should be accepted.
     for (const template of storedTemplates) {
       const storedDocument = this.parseTemplateDocument(template);
       if (!storedDocument) {
@@ -74,12 +105,15 @@ export class TemplateMatcher {
         storedLayoutFeatures
       );
 
-      if (similarity.score >= 90) {
-        return template;
+      if (!bestMatch || similarity.score > bestMatch.similarityScore) {
+        bestMatch = {
+          template,
+          similarityScore: similarity.score,
+        };
       }
     }
 
-    return undefined;
+    return bestMatch;
   }
 
   private parseTemplateDocument(template: TemplateRecord): DocumentModel | undefined {
@@ -92,12 +126,22 @@ export class TemplateMatcher {
 
   private buildMatchResult(
     fingerprint: string,
-    template: TemplateRecord | undefined
+    template: TemplateRecord | undefined,
+    validationRequired: boolean
   ): TemplateMatchResult {
     if (!template) {
       return {
         fingerprint,
         found: false,
+      };
+    }
+
+    if (validationRequired) {
+      return {
+        fingerprint,
+        found: true,
+        template,
+        validationRequired: true,
       };
     }
 
