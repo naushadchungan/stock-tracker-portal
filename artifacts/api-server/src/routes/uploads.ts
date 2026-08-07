@@ -174,6 +174,148 @@ function mapLearnedItems(
   return mapped;
 }
 
+function parseDepotId(
+  value: unknown
+): number | null {
+  const depotId =
+    parseInt(
+      value as string,
+      10
+    );
+
+  return Number.isNaN(
+    depotId
+  )
+    ? null
+    : depotId;
+}
+
+async function persistParsedStockItems(
+  items: ParsedItem[],
+  depotId: number,
+  uploadId: number,
+  stockDate: string | null
+): Promise<void> {
+  const toInsert = items.map(
+    (item) => ({
+      depotId,
+      uploadId,
+      tileName: item.tileName,
+      brand: item.brand,
+      size: item.size,
+      finish: item.finish,
+      boxCount:
+        item.boxCount !== null
+          ? String(item.boxCount)
+          : null,
+      pcsCount:
+        item.pcsCount !== null
+          ? String(item.pcsCount)
+          : null,
+      stockDate,
+      imageData: item.imageData ?? null,
+      location: item.location ?? null,
+    })
+  );
+
+  for (
+    let index = 0;
+    index < toInsert.length;
+    index += 100
+  ) {
+    await db
+      .insert(stockItemsTable)
+      .values(
+        toInsert.slice(
+          index,
+          index + 100
+        )
+      );
+  }
+}
+
+async function processUploadFile(
+  uploadId: number,
+  depotId: number,
+  stockDate: string | null,
+  fileBuffer: Buffer,
+  log: {
+    error: (
+      fields: Record<string, unknown>,
+      message: string
+    ) => void;
+  }
+): Promise<void> {
+  try {
+    const items =
+      await parsePdf(fileBuffer);
+
+    if (items.length === 0) {
+      await db
+        .update(uploadsTable)
+        .set({
+          status: "failed",
+          errorMessage:
+            "No stock items could be extracted from the PDF",
+          completedAt: new Date(),
+        })
+        .where(eq(uploadsTable.id, uploadId));
+
+      return;
+    }
+
+    /*
+     * IMPORTANT:
+     *
+     * Parsing happens BEFORE deletion.
+     *
+     * Therefore if ADIE/Claude fails, the previous depot
+     * stock is preserved.
+     */
+    await db
+      .delete(stockItemsTable)
+      .where(
+        eq(stockItemsTable.depotId, depotId)
+      );
+
+    await persistParsedStockItems(
+      items,
+      depotId,
+      uploadId,
+      stockDate
+    );
+
+    await db
+      .update(uploadsTable)
+      .set({
+        status: "done",
+        itemsExtracted: items.length,
+        completedAt: new Date(),
+      })
+      .where(eq(uploadsTable.id, uploadId));
+
+    console.log(
+      `Upload ${uploadId} completed with ${items.length} items`
+    );
+  } catch (err) {
+    log.error(
+      { err },
+      "PDF processing failed"
+    );
+
+    await db
+      .update(uploadsTable)
+      .set({
+        status: "failed",
+        errorMessage:
+          err instanceof Error
+            ? err.message
+            : "Processing failed",
+        completedAt: new Date(),
+      })
+      .where(eq(uploadsTable.id, uploadId));
+  }
+}
 
 // ============================================================
 // MAIN PDF PARSER
@@ -190,77 +332,25 @@ async function parsePdf(
     pdfBuffer
   );
 
-  console.log(
-    "RAW TEXT LENGTH:",
-    rawText.length
+  logRawTextPreview(
+    rawText
   );
 
-  // Do not print the complete PDF.
-  // Keep only a short preview for debugging.
-  if (rawText.length > 0) {
-    console.log(
-      "RAW TEXT PREVIEW:"
-    );
-
-    console.log(
-      rawText.substring(
-        0,
-        1000
-      )
-    );
-  }
-
-
-  // ==========================================================
-  // IMAGE-ONLY PDF
-  // ==========================================================
-
   if (!rawText.trim()) {
-    console.log(
-      "ADIE: No text layer detected - using Claude Vision"
-    );
-
-    if (
-      pageImages.length === 0
-    ) {
-      console.log(
-        "ADIE: No rendered page images available"
-      );
-
-      return [];
-    }
-
-    return parseViaVision(
+    return parseImageOnlyPdf(
       pageImages,
       images
     );
   }
 
-
-  // ==========================================================
-  // BUILD ADIE DOCUMENT MODEL
-  // ==========================================================
-
-  let document:
-    ReturnType<
-      typeof documentBuilder.build
-    >;
-
-  try {
-    document =
-      documentBuilder.build(
-        rawText
-      );
-  } catch (error) {
-    console.error(
-      "ADIE: Document model build failed:",
-      error
+  const document =
+    await buildAdieDocument(
+      rawText,
+      images,
+      pageImages.length
     );
 
-    /*
-     * Failure to build an ADIE model must not prevent
-     * the older parsers from processing the upload.
-     */
+  if (!document) {
     return parseUsingLegacyPipeline(
       rawText,
       images,
@@ -268,18 +358,161 @@ async function parsePdf(
     );
   }
 
+  const templateMatch =
+    await matchTemplate(
+      document,
+      rawText,
+      images,
+      pageImages.length
+    );
 
-  // ==========================================================
-  // CHECK ADIE MEMORY
-  // ==========================================================
+  if (!templateMatch) {
+    return parseUsingLegacyPipeline(
+      rawText,
+      images,
+      pageImages.length
+    );
+  }
 
-  let templateMatch:
-    ReturnType<
-      typeof templateMatcher.match
-    >;
+  const knownTemplateResult =
+    await tryKnownTemplateExtraction(
+      document,
+      templateMatch
+    );
 
+  if (knownTemplateResult) {
+    return knownTemplateResult;
+  }
+
+  const oldLocalResult =
+    await tryExistingLocalParser(
+      rawText,
+      images,
+      pageImages.length
+    );
+
+  if (oldLocalResult) {
+    return oldLocalResult;
+  }
+
+  if (!templateMatch.found) {
+    const learnedResult =
+      await tryLearningTemplate(
+        rawText,
+        document
+      );
+
+    if (learnedResult) {
+      return learnedResult;
+    }
+  }
+
+  console.log(
+    "ADIE: Falling back to existing Claude parser"
+  );
+
+  return parseViaClaude(
+    rawText,
+    images
+  );
+}
+
+function logRawTextPreview(
+  rawText: string
+): void {
+  console.log(
+    "RAW TEXT LENGTH:",
+    rawText.length
+  );
+
+  if (rawText.length === 0) {
+    return;
+  }
+
+  console.log(
+    "RAW TEXT PREVIEW:"
+  );
+
+  console.log(
+    rawText.substring(
+      0,
+      1000
+    )
+  );
+}
+
+async function parseImageOnlyPdf(
+  pageImages: {
+    b64: string;
+    y: number;
+    page: number;
+  }[],
+  images: {
+    b64: string;
+    y: number;
+    page: number;
+  }[]
+): Promise<ParsedItem[]> {
+  console.log(
+    "ADIE: No text layer detected - using Claude Vision"
+  );
+
+  if (pageImages.length === 0) {
+    console.log(
+      "ADIE: No rendered page images available"
+    );
+
+    return [];
+  }
+
+  return parseViaVision(
+    pageImages,
+    images
+  );
+}
+
+async function buildAdieDocument(
+  rawText: string,
+  images: {
+    b64: string;
+    y: number;
+    page: number;
+  }[],
+  pageCount: number
+): Promise<ReturnType<typeof documentBuilder.build> | null> {
   try {
-    templateMatch =
+    return documentBuilder.build(
+      rawText
+    );
+  } catch (error) {
+    console.error(
+      "ADIE: Document model build failed:",
+      error
+    );
+
+    return null;
+  }
+}
+
+async function matchTemplate(
+  document: ReturnType<
+    typeof documentBuilder.build
+  >,
+  rawText: string,
+  images: {
+    b64: string;
+    y: number;
+    page: number;
+  }[],
+  pageCount: number
+): Promise<
+  | ReturnType<
+      typeof templateMatcher.match
+    >
+  | null
+> {
+  try {
+    const templateMatch =
       templateMatcher.match(
         document
       );
@@ -293,98 +526,180 @@ async function parsePdf(
       "ADIE template known:",
       templateMatch.found
     );
+
+    return templateMatch;
   } catch (error) {
     console.error(
       "ADIE: Template matching failed:",
       error
     );
 
-    return parseUsingLegacyPipeline(
-      rawText,
-      images,
-      pageImages.length
+    return null;
+  }
+}
+
+async function tryKnownTemplateExtraction(
+  document: ReturnType<
+    typeof documentBuilder.build
+  >,
+  templateMatch: ReturnType<
+    typeof templateMatcher.match
+  >
+): Promise<ParsedItem[] | null> {
+  if (
+    !templateMatch.found ||
+    !templateMatch.template
+  ) {
+    return null;
+  }
+
+  console.log(
+    "ADIE: Known template found:",
+    templateMatch.template.id
+  );
+
+  console.log(
+    "ADIE: Claude learning will NOT be called"
+  );
+
+  try {
+    const template =
+      JSON.parse(
+        templateMatch.template
+          .templateJson
+      );
+
+    const extraction =
+      learnedTemplateExtractor.extract(
+        document,
+        template
+      );
+
+    console.log(
+      "ADIE local confidence:",
+      extraction.confidence
+    );
+
+    console.log(
+      "ADIE local items:",
+      extraction.items.length
+    );
+
+    if (extraction.warnings.length > 0) {
+      console.warn(
+        "ADIE local warnings:",
+        extraction.warnings
+      );
+    }
+
+    if (
+      extraction.items.length > 0 &&
+      extraction.confidence >= 80
+    ) {
+      const mapped =
+        mapLearnedItems(
+          extraction.items
+        );
+
+      if (mapped.length > 0) {
+        console.log(
+          "ADIE: Using learned local extractor"
+        );
+
+        console.log(
+          "ADIE: Claude API call avoided"
+        );
+
+        return mapped;
+      }
+    }
+
+    console.warn(
+      "ADIE: Known template extraction was not reliable enough."
+    );
+
+    console.warn(
+      "ADIE: Continuing to compatibility parsers."
+    );
+  } catch (error) {
+    console.error(
+      "ADIE: Known-template extraction failed:",
+      error
     );
   }
 
+  return null;
+}
 
-  // ==========================================================
-  // KNOWN ADIE TEMPLATE
-  // ==========================================================
+async function tryLearningTemplate(
+  rawText: string,
+  document: ReturnType<
+    typeof documentBuilder.build
+  >
+): Promise<ParsedItem[] | null> {
+  console.log(
+    "ADIE: Unknown template - starting Claude learning"
+  );
 
-  if (
-    templateMatch.found &&
-    templateMatch.template
-  ) {
+  try {
+    const learning =
+      await learningCoordinator.process(
+        rawText,
+        document
+      );
+
     console.log(
-      "ADIE: Known template found:",
-      templateMatch.template.id
+      "ADIE learning status:",
+      learning.status
     );
 
-    console.log(
-      "ADIE: Claude learning will NOT be called"
-    );
-
-    try {
-      const template =
-        JSON.parse(
-          templateMatch.template
-            .templateJson
-        );
-
-      const extraction =
-        learnedTemplateExtractor.extract(
-          document,
-          template
-        );
-
+    if (
+      learning.status ===
+        "learned" &&
+      learning.learningResult
+    ) {
       console.log(
-        "ADIE local confidence:",
-        extraction.confidence
+        "ADIE: Template learned successfully"
       );
 
       console.log(
-        "ADIE local items:",
-        extraction.items.length
+        "ADIE learned confidence:",
+        learning.learningResult
+          .confidence
+      );
+
+      console.log(
+        "ADIE learned items:",
+        learning.learningResult
+          .items.length
       );
 
       if (
-        extraction.warnings.length >
-        0
+        learning.learningResult
+          .warnings.length > 0
       ) {
         console.warn(
-          "ADIE local warnings:",
-          extraction.warnings
+          "ADIE learning warnings:",
+          learning.learningResult
+            .warnings
         );
       }
 
-      /*
-       * Use ADIE when:
-       *
-       * - it extracted items
-       * - confidence is reasonably high
-       *
-       * 80 is intentionally slightly below the test result
-       * of 85, while still protecting production from weak
-       * local extraction.
-       */
       if (
-        extraction.items.length >
-          0 &&
-        extraction.confidence >=
-          80
+        learning.learningResult
+          .items.length > 0 &&
+        learning.learningResult
+          .confidence >= 70
       ) {
         const mapped =
           mapLearnedItems(
-            extraction.items
+            learning.learningResult
+              .items
           );
 
         if (mapped.length > 0) {
           console.log(
-            "ADIE: Using learned local extractor"
-          );
-
-          console.log(
-            "ADIE: Claude API call avoided"
+            "ADIE: Using items extracted during learning"
           );
 
           return mapped;
@@ -392,159 +707,17 @@ async function parsePdf(
       }
 
       console.warn(
-        "ADIE: Known template extraction was not reliable enough."
+        "ADIE: Learning completed but extraction result was not reliable enough."
       );
-
-      console.warn(
-        "ADIE: Continuing to compatibility parsers."
-      );
-    } catch (error) {
-      console.error(
-        "ADIE: Known-template extraction failed:",
-        error
-      );
-
-      /*
-       * Never fail the upload solely because the learned
-       * extractor encountered a problem.
-       */
     }
-  }
-
-
-  // ==========================================================
-  // EXISTING LOCAL PARSER
-  // ==========================================================
-  //
-  // Keep the old local parser as a compatibility layer.
-  //
-  // This is especially useful during migration while ADIE is
-  // still learning more supplier layouts.
-  // ==========================================================
-
-  const oldLocalResult =
-    await tryExistingLocalParser(
-      rawText,
-      images,
-      pageImages.length
+  } catch (error) {
+    console.error(
+      "ADIE learning failed:",
+      error
     );
-
-  if (oldLocalResult) {
-    return oldLocalResult;
   }
 
-
-  // ==========================================================
-  // UNKNOWN ADIE TEMPLATE
-  // ==========================================================
-
-  if (!templateMatch.found) {
-    console.log(
-      "ADIE: Unknown template - starting Claude learning"
-    );
-
-    try {
-      const learning =
-        await learningCoordinator.process(
-          rawText,
-          document
-        );
-
-      console.log(
-        "ADIE learning status:",
-        learning.status
-      );
-
-      if (
-        learning.status ===
-          "learned" &&
-        learning.learningResult
-      ) {
-        console.log(
-          "ADIE: Template learned successfully"
-        );
-
-        console.log(
-          "ADIE learned confidence:",
-          learning.learningResult
-            .confidence
-        );
-
-        console.log(
-          "ADIE learned items:",
-          learning.learningResult
-            .items.length
-        );
-
-        if (
-          learning.learningResult
-            .warnings.length > 0
-        ) {
-          console.warn(
-            "ADIE learning warnings:",
-            learning.learningResult
-              .warnings
-          );
-        }
-
-        /*
-         * The first unknown document has already been
-         * extracted by Claude during the learning process.
-         *
-         * Therefore there is no reason to call the old Claude
-         * parser again when this result is usable.
-         */
-        if (
-          learning.learningResult
-            .items.length > 0 &&
-          learning.learningResult
-            .confidence >= 70
-        ) {
-          const mapped =
-            mapLearnedItems(
-              learning.learningResult
-                .items
-            );
-
-          if (mapped.length > 0) {
-            console.log(
-              "ADIE: Using items extracted during learning"
-            );
-
-            return mapped;
-          }
-        }
-
-        console.warn(
-          "ADIE: Learning completed but extraction result was not reliable enough."
-        );
-      }
-    } catch (error) {
-      console.error(
-        "ADIE learning failed:",
-        error
-      );
-
-      /*
-       * ADIE failure must never stop an otherwise parseable
-       * stock report.
-       */
-    }
-  }
-
-
-  // ==========================================================
-  // FINAL CLAUDE FALLBACK
-  // ==========================================================
-
-  console.log(
-    "ADIE: Falling back to existing Claude parser"
-  );
-
-  return parseViaClaude(
-    rawText,
-    images
-  );
+  return null;
 }
 
 
@@ -784,12 +957,11 @@ router.post(
     // --------------------------------------------------------
 
     const depotId =
-      parseInt(
-        req.body.depotId,
-        10
+      parseDepotId(
+        req.body.depotId
       );
 
-    if (isNaN(depotId)) {
+    if (depotId === null) {
       return res
         .status(400)
         .json({
@@ -881,208 +1053,13 @@ router.post(
       req.log;
 
 
-    void (async () => {
-      try {
-        // ----------------------------------------------------
-        // PARSE PDF
-        // ----------------------------------------------------
-
-        const items =
-          await parsePdf(
-            fileBuffer
-          );
-
-
-        // ----------------------------------------------------
-        // EMPTY RESULT
-        // ----------------------------------------------------
-
-        if (
-          items.length === 0
-        ) {
-          await db
-            .update(
-              uploadsTable
-            )
-            .set({
-              status:
-                "failed",
-
-              errorMessage:
-                "No stock items could be extracted from the PDF",
-
-              completedAt:
-                new Date(),
-            })
-            .where(
-              eq(
-                uploadsTable.id,
-                uploadId
-              )
-            );
-
-          return;
-        }
-
-
-        // ----------------------------------------------------
-        // REMOVE PREVIOUS DEPOT STOCK
-        // ----------------------------------------------------
-
-        /*
-         * IMPORTANT:
-         *
-         * Parsing happens BEFORE deletion.
-         *
-         * Therefore if ADIE/Claude fails, the previous depot
-         * stock is preserved.
-         */
-
-        await db
-          .delete(
-            stockItemsTable
-          )
-          .where(
-            eq(
-              stockItemsTable.depotId,
-              depotId
-            )
-          );
-
-
-        // ----------------------------------------------------
-        // MAP DATABASE ROWS
-        // ----------------------------------------------------
-
-        const toInsert =
-          items.map(
-            (item) => ({
-              depotId,
-
-              uploadId,
-
-              tileName:
-                item.tileName,
-
-              brand:
-                item.brand,
-
-              size:
-                item.size,
-
-              finish:
-                item.finish,
-
-              boxCount:
-                item.boxCount !==
-                null
-                  ? String(
-                      item.boxCount
-                    )
-                  : null,
-
-              pcsCount:
-                item.pcsCount !==
-                null
-                  ? String(
-                      item.pcsCount
-                    )
-                  : null,
-
-              stockDate,
-
-              imageData:
-                item.imageData ??
-                null,
-
-              location:
-                item.location ??
-                null,
-            })
-          );
-
-
-        // ----------------------------------------------------
-        // INSERT IN BATCHES
-        // ----------------------------------------------------
-
-        for (
-          let i = 0;
-          i < toInsert.length;
-          i += 100
-        ) {
-          await db
-            .insert(
-              stockItemsTable
-            )
-            .values(
-              toInsert.slice(
-                i,
-                i + 100
-              )
-            );
-        }
-
-
-        // ----------------------------------------------------
-        // MARK UPLOAD COMPLETE
-        // ----------------------------------------------------
-
-        await db
-          .update(
-            uploadsTable
-          )
-          .set({
-            status:
-              "done",
-
-            itemsExtracted:
-              items.length,
-
-            completedAt:
-              new Date(),
-          })
-          .where(
-            eq(
-              uploadsTable.id,
-              uploadId
-            )
-          );
-
-
-        console.log(
-          `Upload ${uploadId} completed with ${items.length} items`
-        );
-      } catch (err) {
-        log.error(
-          { err },
-          "PDF processing failed"
-        );
-
-        await db
-          .update(
-            uploadsTable
-          )
-          .set({
-            status:
-              "failed",
-
-            errorMessage:
-              err instanceof Error
-                ? err.message
-                : "Processing failed",
-
-            completedAt:
-              new Date(),
-          })
-          .where(
-            eq(
-              uploadsTable.id,
-              uploadId
-            )
-          );
-      }
-    })();
+    void processUploadFile(
+      uploadId,
+      depotId,
+      stockDate,
+      fileBuffer,
+      log
+    );
 
 
     return;
