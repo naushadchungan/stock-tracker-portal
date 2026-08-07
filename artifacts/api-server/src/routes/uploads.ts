@@ -254,7 +254,8 @@ async function persistParsedStockItems(
   items: ParsedItem[],
   depotId: number,
   uploadId: number,
-  stockDate: string | null
+  stockDate: string | null,
+  tx?: any
 ): Promise<void> {
   const toInsert = items.map(
     (item) => ({
@@ -283,7 +284,9 @@ async function persistParsedStockItems(
     index < toInsert.length;
     index += 100
   ) {
-    await db
+    const targetDb = tx ?? db;
+
+    await targetDb
       .insert(stockItemsTable)
       .values(
         toInsert.slice(
@@ -334,18 +337,26 @@ async function processUploadFile(
      * Therefore if ADIE/Claude fails, the previous depot
      * stock is preserved.
      */
-    await db
-      .delete(stockItemsTable)
-      .where(
-        eq(stockItemsTable.depotId, depotId)
-      );
 
-    await persistParsedStockItems(
-      items,
-      depotId,
-      uploadId,
-      stockDate
-    );
+    // Transaction boundary: replace the depot stock atomically so the
+    // delete-and-insert sequence is all-or-nothing.
+    await db.transaction(async (tx) => {
+      await tx
+        .delete(stockItemsTable)
+        .where(
+          eq(stockItemsTable.depotId, depotId)
+        );
+
+      // If any insert fails here, the transaction rolls back and the
+      // previous stock remains intact.
+      await persistParsedStockItems(
+        items,
+        depotId,
+        uploadId,
+        stockDate,
+        tx
+      );
+    });
 
     patchUploadProcessingMetadata(uploadId, {
       processingTimeMs: Date.now() - startedAt,
