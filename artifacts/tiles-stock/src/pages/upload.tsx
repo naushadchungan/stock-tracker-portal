@@ -44,8 +44,29 @@ type DepotRowState = {
   templateMatched?: string
   similarityScore?: number
   confidenceScore?: number
+  confidenceDecision?: string
   claudeUsed?: boolean
   validationRequired?: boolean
+}
+
+const formatParserUsed = (value?: string | null) => {
+  if (value == null || value === "") return null
+
+  switch (value) {
+    case "learned-template-extractor":
+      return "Learned Template"
+    case "vision":
+      return "Vision OCR"
+    case "legacy-parser":
+      return "Legacy Parser"
+    default:
+      return value
+  }
+}
+
+const formatConfidenceScore = (value?: number | null) => {
+  if (value == null || Number.isNaN(value)) return null
+  return `${Math.round(value)}%`
 }
 
 export default function UploadReport() {
@@ -87,15 +108,26 @@ export default function UploadReport() {
           const res = await fetch(`/api/uploads/${row.uploadId}`, { credentials: "include" })
           if (!res.ok) return
           const data = await res.json() as Upload
+          const metadataPatch = {
+            processingTimeMs: data.processingTimeMs ?? undefined,
+            parserUsed: data.parserUsed ?? undefined,
+            templateMatched: data.templateMatched ?? undefined,
+            similarityScore: data.similarityScore ?? undefined,
+            confidenceScore: data.confidenceScore ?? undefined,
+            confidenceDecision: data.confidenceDecision ?? undefined,
+            claudeUsed: data.claudeUsed ?? undefined,
+            validationRequired: data.validationRequired ?? undefined,
+          }
+
           if (data.status === "done") {
-            updateRow(row.depotId, { status: "done", itemsExtracted: data.itemsExtracted ?? undefined, uploadId: null })
+            updateRow(row.depotId, { status: "done", itemsExtracted: data.itemsExtracted ?? undefined, uploadId: null, ...metadataPatch })
             queryClient.invalidateQueries({ queryKey: getListUploadsQueryKey() })
             queryClient.invalidateQueries({ queryKey: getListStockQueryKey() })
             queryClient.invalidateQueries({ queryKey: getGetStockSummaryQueryKey() })
           } else if (data.status === "failed") {
-            updateRow(row.depotId, { status: "failed", errorMessage: data.errorMessage ?? "Processing failed", uploadId: null })
+            updateRow(row.depotId, { status: "failed", errorMessage: data.errorMessage ?? "Processing failed", uploadId: null, ...metadataPatch })
           } else {
-            updateRow(row.depotId, { status: "processing" })
+            updateRow(row.depotId, { status: "processing", ...metadataPatch })
           }
         } catch { /* ignore */ }
       }))
@@ -134,7 +166,18 @@ export default function UploadReport() {
           const result = await uploadMutation.mutateAsync({
             data: { depotId: row.depotId, stockDate: stockDate || undefined, file: row.file! },
           })
-          updateRow(row.depotId, { uploadId: result.id, status: "processing" })
+          updateRow(row.depotId, {
+            uploadId: result.id,
+            status: "processing",
+            processingTimeMs: result.processingTimeMs ?? undefined,
+            parserUsed: result.parserUsed ?? undefined,
+            templateMatched: result.templateMatched ?? undefined,
+            similarityScore: result.similarityScore ?? undefined,
+            confidenceScore: result.confidenceScore ?? undefined,
+            confidenceDecision: result.confidenceDecision ?? undefined,
+            claudeUsed: result.claudeUsed ?? undefined,
+            validationRequired: result.validationRequired ?? undefined,
+          })
         } catch (err: any) {
           updateRow(row.depotId, {
             status: "failed",
@@ -168,6 +211,7 @@ export default function UploadReport() {
       templateMatched: undefined,
       similarityScore: undefined,
       confidenceScore: undefined,
+      confidenceDecision: undefined,
       claudeUsed: undefined,
       validationRequired: undefined,
     })))
@@ -252,10 +296,11 @@ export default function UploadReport() {
                   { label: "Upload status", value: row.status === "done" ? "Completed" : "Not Available" },
                   { label: "Processing time", value: row.processingTimeMs != null ? `${row.processingTimeMs} ms` : "Not Available" },
                   { label: "Items extracted", value: row.itemsExtracted != null ? `${row.itemsExtracted}` : "Not Available" },
-                  { label: "Parser used", value: row.parserUsed || "Not Available" },
-                  { label: "Template matched", value: row.templateMatched || "Not Available" },
+                  { label: "Parser used", value: row.parserUsed != null && row.parserUsed !== "" ? formatParserUsed(row.parserUsed) ?? row.parserUsed : "Not Available" },
+                  { label: "Template matched", value: row.templateMatched != null && row.templateMatched !== "" ? row.templateMatched : "Not Available" },
                   { label: "Similarity score", value: row.similarityScore != null ? `${row.similarityScore}` : "Not Available" },
-                  { label: "Confidence score", value: row.confidenceScore != null ? `${row.confidenceScore}` : "Not Available" },
+                  { label: "Confidence score", value: row.confidenceScore != null ? formatConfidenceScore(row.confidenceScore) ?? `${row.confidenceScore}` : "Not Available" },
+                  { label: "Confidence decision", value: row.confidenceDecision != null && row.confidenceDecision !== "" ? row.confidenceDecision : "Not Available" },
                   { label: "Claude used", value: row.claudeUsed == null ? "Not Available" : row.claudeUsed ? "Yes" : "No" },
                   { label: "Validation required", value: row.validationRequired == null ? "Not Available" : row.validationRequired ? "Yes" : "No" },
                 ]
