@@ -1,0 +1,1305 @@
+diff --git a/artifacts/api-server/src/templateEngine/extractors/learnedTemplateExtractor.ts b/artifacts/api-server/src/templateEngine/extractors/learnedTemplateExtractor.ts
+index 9eb8baa..ed2b27c 100644
+--- a/artifacts/api-server/src/templateEngine/extractors/learnedTemplateExtractor.ts
++++ b/artifacts/api-server/src/templateEngine/extractors/learnedTemplateExtractor.ts
+@@ -118,113 +118,162 @@ export class LearnedTemplateExtractor {
+   // ============================================================
+ 
+   private extractFromBlocks(
+-  document: DocumentModel,
+-  template: LearnedTemplateDefinition
+-): LocalExtractionResult {
+-  const items: LearnedTileItem[] = [];
+-  const warnings: string[] = [];
+-
+-  const context: SectionContext = {
+-    brand: null,
+-    finish: null,
+-    size: null,
+-    dispatchDate: null,
+-    piecesPerBox: null,
+-  };
+-
+-  const lines = (document.blocks ?? [])
+-    .map((block) =>
+-      this.normalizeWhitespace(block.text)
+-    )
+-    .filter(Boolean);
++    document: DocumentModel,
++    template: LearnedTemplateDefinition
++  ): LocalExtractionResult {
++    const items: LearnedTileItem[] = [];
++    const warnings: string[] = [];
++
++    const context: SectionContext = {
++      brand: null,
++      finish: null,
++      size: null,
++      dispatchDate: null,
++      piecesPerBox: null,
++    };
++
++    const lines = (document.blocks ?? [])
++      .map((block) => this.normalizeWhitespace(block.text))
++      .filter(Boolean);
++
++    for (let index = 0; index < lines.length; index++) {
++      const consumed = this.processBlockLine(
++        index,
++        lines,
++        context,
++        template,
++        items
++      );
++
++      if (consumed !== null) {
++        index += consumed;
++      }
++    }
++
++    const deduplicated =
++      this.deduplicateItems(items);
++
++    let confidence =
++      deduplicated.length > 0 ? 85 : 0;
+ 
+-  for (let i = 0; i < lines.length; i++) {
+-    const line = lines[i];
++    if (deduplicated.length > 0) {
++      const incomplete =
++        deduplicated.filter(
++          (item) =>
++            !item.itemName ||
++            item.stock === null
++        ).length;
++
++      if (incomplete > 0) {
++        confidence -= 10;
++      }
++    }
++
++    if (deduplicated.length === 0) {
++      warnings.push(
++        "Template matched, but no valid stock rows were extracted."
++      );
++    }
++
++    return {
++      items: deduplicated,
++      confidence,
++      warnings,
++    };
++  }
++
++  private processBlockLine(
++    index: number,
++    lines: string[],
++    context: SectionContext,
++    template: LearnedTemplateDefinition,
++    items: LearnedTileItem[]
++  ): number | null {
++    const line = lines[index];
+ 
+     if (!line) {
+-      continue;
++      return null;
+     }
+ 
+     const nextLine =
+-      i + 1 < lines.length
+-        ? lines[i + 1]
++      index + 1 < lines.length
++        ? lines[index + 1]
+         : null;
+ 
+     const afterNextLine =
+-      i + 2 < lines.length
+-        ? lines[i + 2]
++      index + 2 < lines.length
++        ? lines[index + 2]
+         : null;
+-        // ========================================================
+-// 0. DESCRIPTION + DISPATCH/STOCK ON SECOND LINE
+-// ========================================================
+-//
+-// Some PDF generators visually render one table row but
+-// expose the text layer in this order:
+-//
+-//   PRODUCT DESCRIPTION (PART
+-//   CONTINUATION) (DESPATCH 0 0
+-//   DATE : 27-07-2026)
+-//
+-// Example:
+-//
+-//   4X2 BEETHAS NEOMI BROWN (RANDOM
+-//   4) (DESPATCH 0 0
+-//   DATE : 27-07-2026)
+-//
+-// The stock values are embedded after DESPATCH rather than
+-// appearing as a normal stock-only line.
+-//
+-// This rule is structural and supplier-independent.
+-// ========================================================
+-
+-if (
+-  nextLine &&
+-  afterNextLine &&
+-  /\b(?:DESPATCH|DISPATCH)\b/i.test(nextLine) &&
+-  this.looksLikeProductName(line) &&
+-  !this.isStructuralLine(line) &&
+-  !this.isDispatchDateLine(line)
+-) {
+-  /*
+-   * Find the BOX / PCS numbers at the end of the
+-   * second physical line.
+-   *
+-   * Example:
+-   *
+-   * 4) (DESPATCH 0 0
+-   *
+-   * stockPart[1] = "4)"
+-   * stockPart[2] = "0"
+-   * stockPart[3] = "0"
+-   */
+-  const stockPart =
+-    nextLine.match(
++
++    const handlers = [
++      this.tryExtractDescriptionDispatchStock,
++      this.tryExtractBrokenDispatchProduct,
++      this.tryExtractProductDescriptionAndStockNextLine,
++      this.tryExtractNormalCompleteProductRow,
++      this.tryExtractStandaloneDispatchDate,
++      this.tryExtractSectionHeading,
++      this.tryExtractFinishHeading,
++      this.tryExtractBrandHeading,
++      this.tryExtractStructuralLine,
++      this.tryExtractFinalFallback,
++    ];
++
++    for (const handler of handlers) {
++      const consumed = handler.call(
++        this,
++        line,
++        nextLine,
++        afterNextLine,
++        index,
++        lines,
++        context,
++        template,
++        items
++      );
++
++      if (consumed !== null) {
++        return consumed;
++      }
++    }
++
++    return null;
++  }
++
++  private tryExtractDescriptionDispatchStock(
++    line: string,
++    nextLine: string | null,
++    afterNextLine: string | null,
++    index: number,
++    lines: string[],
++    context: SectionContext,
++    template: LearnedTemplateDefinition,
++    items: LearnedTileItem[]
++  ): number | null {
++    if (
++      !nextLine ||
++      !afterNextLine ||
++      !/\b(?:DESPATCH|DISPATCH)\b/i.test(nextLine) ||
++      !this.looksLikeProductName(line) ||
++      this.isStructuralLine(line) ||
++      this.isDispatchDateLine(line)
++    ) {
++      return null;
++    }
++
++    const stockPart = nextLine.match(
+       /^(.*?)\s*\(?\s*(?:DESPATCH|DISPATCH)\s+(-?\d[\d,]*(?:\.\d+)?)\s+(-?\d[\d,]*(?:\.\d+)?)\s*$/i
+     );
+ 
+-  if (stockPart) {
+-    const descriptionContinuation =
+-      this.normalizeWhitespace(
+-        stockPart[1] ?? ""
+-      );
++    if (!stockPart) {
++      return null;
++    }
+ 
+-    const boxValue =
+-      stockPart[2];
++    const descriptionContinuation =
++      this.normalizeWhitespace(stockPart[1] ?? "");
+ 
+-    const pcsValue =
+-      stockPart[3];
++    const boxValue = stockPart[2];
++    const pcsValue = stockPart[3];
+ 
+-    /*
+-     * Reconstruct the actual logical product:
+-     *
+-     * 4X2 BEETHAS NEOMI BROWN (RANDOM
+-     * +
+-     * 4)
+-     *
+-     * becomes:
+-     *
+-     * 4X2 BEETHAS NEOMI BROWN (RANDOM 4)
+-     */
+     const reconstructedDescription =
+       this.normalizeWhitespace(
+         `${line} ${descriptionContinuation}`
+@@ -233,710 +282,443 @@ if (
+     const reconstructedRow =
+       `${reconstructedDescription} ${boxValue} ${pcsValue}`;
+ 
+-    const parsed =
+-      this.parseProductLine(
+-        reconstructedRow,
+-        context,
+-        template
+-      );
+-
+-    if (
+-      parsed &&
+-      parsed.itemName &&
+-      parsed.stock !== null
+-    ) {
+-      parsed.itemName =
+-        this.cleanItemName(
+-          parsed.itemName
+-        );
+-
+-      /*
+-       * Date normally continues onto the following
+-       * physical line:
+-       *
+-       * DATE : 27-07-2026)
+-       */
+-      const dispatchText =
+-        `${nextLine} ${afterNextLine}`;
+-
+-      parsed.dispatchDate =
+-        this.extractDispatchDate(
+-          dispatchText
+-        ) ??
+-        this.extractLooseDispatchDate(
+-          dispatchText
+-        );
+-
+-      if (
+-        parsed.brand &&
+-        this.isInvalidBrand(
+-          parsed.brand
+-        )
+-      ) {
+-        parsed.brand = null;
+-      }
+-
+-      items.push(parsed);
++    const parsed = this.parseProductLine(
++      reconstructedRow,
++      context,
++      template
++    );
+ 
+-      /*
+-       * Consume:
+-       *
+-       * current description line
+-       * continuation + DESPATCH + BOX/PCS
+-       * DATE continuation
+-       */
+-      i += 2;
++    if (!parsed || !parsed.itemName || parsed.stock === null) {
++      return null;
++    }
+ 
+-      context.dispatchDate = null;
++    parsed.dispatchDate =
++      this.extractDispatchDate(`${nextLine} ${afterNextLine}`) ??
++      this.extractLooseDispatchDate(`${nextLine} ${afterNextLine}`);
+ 
+-      continue;
++    if (parsed.brand && this.isInvalidBrand(parsed.brand)) {
++      parsed.brand = null;
+     }
+-  }
+-}
+ 
+-    // ========================================================
+-    // 1. BROKEN DISPATCH PRODUCT
+-    // ========================================================
+-    //
+-    // Example:
+-    //
+-    // 4X2 SPEROX 3D BROWN (DESPATCH
+-    // 0 1
+-    // DATE : 15-07-2026)
+-    //
+-    // This MUST be checked before heading detection.
+-    // ========================================================
++    this.finalizeParsedProduct(parsed, items, context);
++    return 2;
++  }
+ 
++  private tryExtractBrokenDispatchProduct(
++    line: string,
++    nextLine: string | null,
++    afterNextLine: string | null,
++    index: number,
++    lines: string[],
++    context: SectionContext,
++    template: LearnedTemplateDefinition,
++    items: LearnedTileItem[]
++  ): number | null {
+     if (
+-      this.looksLikeBrokenDispatchProduct(line) &&
+-      nextLine &&
+-      this.looksLikeStockContinuation(nextLine)
++      !this.looksLikeBrokenDispatchProduct(line) ||
++      !nextLine ||
++      !this.looksLikeStockContinuation(nextLine)
+     ) {
+-      const reconstructedDescription = line
+-        .replace(
+-          /\(?\s*(?:DESPATCH|DISPATCH)\s*$/i,
+-          ""
+-        )
+-        .trim();
++      return null;
++    }
+ 
+-      const reconstructed =
+-        `${reconstructedDescription} ${nextLine}`;
++    const reconstructedDescription = line
++      .replace(/\(?\s*(?:DESPATCH|DISPATCH)\s*$/i, "")
++      .trim();
+ 
+-      const parsed =
+-        this.parseProductLine(
+-          reconstructed,
+-          context,
+-          template
+-        );
++    const reconstructed = `${reconstructedDescription} ${nextLine}`;
+ 
+-      if (
+-        parsed &&
+-        parsed.itemName &&
+-        parsed.stock !== null
+-      ) {
+-        parsed.itemName =
+-          this.cleanItemName(parsed.itemName);
+-
+-        /*
+-         * The date may be on the third line.
+-         */
+-        if (afterNextLine) {
+-          parsed.dispatchDate =
+-            this.extractDispatchDate(
+-              `${line} ${afterNextLine}`
+-            ) ??
+-            this.extractLooseDispatchDate(
+-              `${line} ${afterNextLine}`
+-            );
+-        } else {
+-          parsed.dispatchDate = null;
+-        }
+-
+-        if (
+-          parsed.brand &&
+-          this.isInvalidBrand(parsed.brand)
+-        ) {
+-          parsed.brand = null;
+-        }
++    const parsed = this.parseProductLine(
++      reconstructed,
++      context,
++      template
++    );
+ 
+-        items.push(parsed);
++    if (!parsed || !parsed.itemName || parsed.stock === null) {
++      return null;
++    }
+ 
+-        /*
+-         * Consume stock line.
+-         */
+-        i++;
++    if (afterNextLine) {
++      parsed.dispatchDate =
++        this.extractDispatchDate(`${line} ${afterNextLine}`) ??
++        this.extractLooseDispatchDate(`${line} ${afterNextLine}`);
++    } else {
++      parsed.dispatchDate = null;
++    }
+ 
+-        /*
+-         * Consume:
+-         *
+-         * DATE : 15-07-2026)
+-         */
+-        if (
+-          afterNextLine &&
+-          this.looksLikeDispatchContinuation(
+-            afterNextLine
+-          )
+-        ) {
+-          i++;
+-        }
++    if (parsed.brand && this.isInvalidBrand(parsed.brand)) {
++      parsed.brand = null;
++    }
+ 
+-        context.dispatchDate = null;
++    this.finalizeParsedProduct(parsed, items, context);
+ 
+-        continue;
+-      }
+-    }
++    const extraConsumed =
++      afterNextLine && this.looksLikeDispatchContinuation(afterNextLine)
++        ? 2
++        : 1;
+ 
+-    // ========================================================
+-    // 2. PRODUCT DESCRIPTION + STOCK ON NEXT LINE
+-    // ========================================================
+-    //
+-    // Examples:
+-    //
+-    // 800X2400 SHREEM ELEGANT WHITE
+-    // 373 0
+-    //
+-    // 4X2 SUZORA GROVEL BROWN (MISHKA)
+-    // 128 1
+-    //
+-    // 1X1 AARAV FLORRA TERACOTTA ( T.
+-    // 944 3
+-    // CYCLONE)
+-    //
+-    // This MUST also run before section detection.
+-    // ========================================================
++    return extraConsumed;
++  }
+ 
++  private tryExtractProductDescriptionAndStockNextLine(
++    line: string,
++    nextLine: string | null,
++    afterNextLine: string | null,
++    index: number,
++    lines: string[],
++    context: SectionContext,
++    template: LearnedTemplateDefinition,
++    items: LearnedTileItem[]
++  ): number | null {
+     if (
+-      nextLine &&
+-      this.looksLikeStockContinuation(nextLine) &&
+-      this.looksLikeProductName(line) &&
+-      !this.isDispatchDateLine(line) &&
+-      !this.isStructuralLine(line)
++      !nextLine ||
++      !this.looksLikeStockContinuation(nextLine) ||
++      !this.looksLikeProductName(line) ||
++      this.isDispatchDateLine(line) ||
++      this.isStructuralLine(line)
+     ) {
+-      let description = line;
+-
+-let consumedAfterStock = false;
+-
+-/*
+- * PDF text extraction does not always preserve the
+- * visual order of text inside a table cell.
+- *
+- * A visually single row such as:
+- *
+- *   4X2 BEETHAS NEOMI BROWN (RANDOM 4)
+- *   (DESPATCH DATE : 27-07-2026)    0    0
+- *
+- * may be extracted as:
+- *
+- *   4X2 BEETHAS NEOMI BROWN (RANDOM
+- *   0 0
+- *   4)
+- *   (DESPATCH DATE : 27-07-2026)
+- *
+- * Therefore the text immediately after the stock
+- * line may still belong to the product description.
+- *
+- * This is intentionally generic. It does not depend
+- * on BEETHAS, RANDOM, or any supplier name.
+- */
+-if (afterNextLine) {
+-  const afterIsDescriptionContinuation =
+-    this.looksLikeDescriptionContinuation(
+-      line,
+-      afterNextLine
+-    );
+-
+-  /*
+-   * Handle a dangling closing fragment such as:
+-   *
+-   *   (RANDOM
+-   *   0 0
+-   *   4)
+-   *
+-   *   (SEMI
+-   *   342 1
+-   *   HIGH GLOSSY)
+-   *
+-   *   ( T.
+-   *   944 3
+-   *   CYCLONE)
+-   */
+-  const hasUnclosedParenthesis =
+-    (line.match(/\(/g) ?? []).length >
+-    (line.match(/\)/g) ?? []).length;
+-
+-  const looksLikeClosingFragment =
+-    hasUnclosedParenthesis &&
+-    afterNextLine.length <= 80 &&
+-    /\)/.test(afterNextLine) &&
+-    !this.looksLikeStockContinuation(
+-      afterNextLine
+-    ) &&
+-    !this.isDispatchDateLine(
+-      afterNextLine
+-    );
++      return null;
++    }
+ 
+-  if (
+-    afterIsDescriptionContinuation ||
+-    looksLikeClosingFragment
+-  ) {
+-    description =
+-      `${description} ${afterNextLine}`;
++    let description = line;
++    let consumedAfterStock = false;
+ 
+-    consumedAfterStock = true;
+-  }
+-}
++    if (afterNextLine) {
++      const afterIsDescriptionContinuation =
++        this.looksLikeDescriptionContinuation(
++          line,
++          afterNextLine
++        );
+ 
+-      const reconstructed =
+-        `${description} ${nextLine}`;
++      const hasUnclosedParenthesis =
++        (line.match(/\(/g) ?? []).length >
++        (line.match(/\)/g) ?? []).length;
+ 
+-      const parsed =
+-        this.parseProductLine(
+-          reconstructed,
+-          context,
+-          template
+-        );
++      const looksLikeClosingFragment =
++        hasUnclosedParenthesis &&
++        afterNextLine.length <= 80 &&
++        /\)/.test(afterNextLine) &&
++        !this.looksLikeStockContinuation(afterNextLine) &&
++        !this.isDispatchDateLine(afterNextLine);
+ 
+       if (
+-        parsed &&
+-        parsed.itemName &&
+-        parsed.stock !== null
++        afterIsDescriptionContinuation ||
++        looksLikeClosingFragment
+       ) {
+-        parsed.itemName =
+-          this.cleanItemName(parsed.itemName);
+-
+-        /*
+-         * Search the complete reconstructed text for
+-         * a dispatch date.
+-         */
+-        /*
+- * Search a slightly wider local window for a date.
+- *
+- * If afterNextLine was consumed as part of the
+- * description, the dispatch date may be one line
+- * further down.
+- */
+-const possibleDateLine =
+-  consumedAfterStock &&
+-  i + 3 < lines.length
+-    ? lines[i + 3]
+-    : afterNextLine;
+-
+-const dateSearchText =
+-  `${line} ${afterNextLine ?? ""} ${possibleDateLine ?? ""}`;
+-
+-parsed.dispatchDate =
+-  this.extractDispatchDate(
+-    dateSearchText
+-  ) ??
+-  this.extractLooseDispatchDate(
+-    dateSearchText
+-  );
++        description = `${description} ${afterNextLine}`;
++        consumedAfterStock = true;
++      }
++    }
+ 
+-        parsed.dispatchDate =
+-          this.extractDispatchDate(
+-            dateSearchText
+-          ) ??
+-          this.extractLooseDispatchDate(
+-            dateSearchText
+-          );
++    const reconstructed = `${description} ${nextLine}`;
+ 
+-        /*
+-         * Protect brand from malformed context.
+-         */
+-        if (
+-          parsed.brand &&
+-          this.isInvalidBrand(parsed.brand)
+-        ) {
+-          parsed.brand = null;
+-        }
++    const parsed = this.parseProductLine(
++      reconstructed,
++      context,
++      template
++    );
+ 
+-        items.push(parsed);
++    if (!parsed || !parsed.itemName || parsed.stock === null) {
++      return null;
++    }
+ 
+-        /*
+-         * Consume stock line.
+-         */
+-        i++;
++    const possibleDateLine =
++      consumedAfterStock && index + 3 < lines.length
++        ? lines[index + 3]
++        : afterNextLine;
+ 
+-        /*
+-         * Also consume description continuation.
+-         */
+-        if (consumedAfterStock) {
+-          i++;
+-        }
+-        /*
+- * If the next line is a standalone dispatch date,
+- * consume it too because it belongs to the product
+- * we just reconstructed.
+- */
+-if (
+-  i + 1 < lines.length
+-) {
+-  const possibleDispatchLine =
+-    lines[i + 1];
++    const dateSearchText =
++      `${line} ${afterNextLine ?? ""} ${possibleDateLine ?? ""}`;
+ 
+-  if (
+-    possibleDispatchLine &&
+-    this.isDispatchDateLine(
+-      possibleDispatchLine
+-    )
+-  ) {
+-    const date =
+-      this.extractDispatchDate(
+-        possibleDispatchLine
+-      ) ??
+-      this.extractLooseDispatchDate(
+-        possibleDispatchLine
+-      );
++    parsed.dispatchDate =
++      this.extractDispatchDate(dateSearchText) ??
++      this.extractLooseDispatchDate(dateSearchText);
+ 
+-    if (date) {
+-      parsed.dispatchDate = date;
+-      i++;
++    if (parsed.brand && this.isInvalidBrand(parsed.brand)) {
++      parsed.brand = null;
+     }
+-  }
+-}
+ 
+-        context.dispatchDate = null;
++    this.finalizeParsedProduct(parsed, items, context);
+ 
+-        continue;
+-      }
++    let consumedLines = 1;
++
++    if (consumedAfterStock) {
++      consumedLines += 1;
+     }
+ 
+-    // ========================================================
+-    // 3. NORMAL COMPLETE PRODUCT ROW
+-    // ========================================================
+-    //
+-    // IMPORTANT:
+-    //
+-    // Try a normal product BEFORE deciding that the line
+-    // is a size/brand/finish heading.
+-    //
+-    // This prevents product descriptions from polluting
+-    // context.brand.
+-    // ========================================================
++    const dispatchDateLineIndex =
++      index + consumedLines + 1;
+ 
+-    if (
+-      !this.isStructuralLine(line) &&
+-      !this.isDispatchDateLine(line)
+-    ) {
+-      const parsed =
+-        this.parseProductLine(
+-          line,
+-          context,
+-          template
+-        );
++    if (dispatchDateLineIndex < lines.length) {
++      const possibleDispatchLine = lines[dispatchDateLineIndex];
+ 
+       if (
+-        parsed &&
+-        parsed.itemName &&
+-        parsed.stock !== null
++        possibleDispatchLine &&
++        this.isDispatchDateLine(possibleDispatchLine)
+       ) {
+-        parsed.itemName =
+-          this.cleanItemName(parsed.itemName);
+-
+-        const inlineDate =
+-          this.extractDispatchDate(line) ??
+-          this.extractLooseDispatchDate(line);
++        const date =
++          this.extractDispatchDate(possibleDispatchLine) ??
++          this.extractLooseDispatchDate(possibleDispatchLine);
+ 
+-        /*
+-         * Never inherit a stale date.
+-         */
+-        parsed.dispatchDate =
+-          inlineDate ?? null;
+-
+-        if (
+-          parsed.brand &&
+-          this.isInvalidBrand(parsed.brand)
+-        ) {
+-          parsed.brand = null;
++        if (date) {
++          parsed.dispatchDate = date;
++          consumedLines += 1;
+         }
+-
+-        items.push(parsed);
+-
+-        context.dispatchDate = null;
+-
+-        continue;
+       }
+     }
+ 
+-    // ========================================================
+-    // 4. STANDALONE DISPATCH DATE
+-    // ========================================================
+-    //
+-    // Example:
+-    //
+-    // 4X2 SUZORA GROVEL BROWN (MISHKA)
+-    // 128 1
+-    // (DESPATCH DATE : 23-07-2026)
+-    //
+-    // The date belongs to the PREVIOUS product.
+-    // It must never leak into the next product.
+-    // ========================================================
+-
+-    const dispatchDate =
+-      this.extractDispatchDate(line) ??
+-      this.extractLooseDispatchDate(line);
++    return consumedLines;
++  }
+ 
++  private tryExtractNormalCompleteProductRow(
++    line: string,
++    nextLine: string | null,
++    afterNextLine: string | null,
++    index: number,
++    lines: string[],
++    context: SectionContext,
++    template: LearnedTemplateDefinition,
++    items: LearnedTileItem[]
++  ): number | null {
+     if (
+-      dispatchDate &&
++      this.isStructuralLine(line) ||
+       this.isDispatchDateLine(line)
+     ) {
+-      if (items.length > 0) {
+-        const previous =
+-          items[items.length - 1];
+-
+-        /*
+-         * A standalone dispatch date immediately after
+-         * a product belongs to that product.
+-         */
+-        if (previous) {
+-          previous.dispatchDate =
+-            dispatchDate;
+-        }
+-      }
++      return null;
++    }
+ 
+-      context.dispatchDate = null;
++    const parsed = this.parseProductLine(
++      line,
++      context,
++      template
++    );
+ 
+-      continue;
++    if (!parsed || !parsed.itemName || parsed.stock === null) {
++      return null;
+     }
+ 
+-    // ========================================================
+-    // 5. SIZE / SECTION HEADING
+-    // ========================================================
++    const inlineDate =
++      this.extractDispatchDate(line) ??
++      this.extractLooseDispatchDate(line);
+ 
+-    const detectedSize =
+-      this.extractSize(line);
++    parsed.dispatchDate = inlineDate ?? null;
+ 
+-    if (
+-      detectedSize &&
+-      this.looksLikeSectionHeading(line)
+-    ) {
+-      context.size =
+-        detectedSize;
+-
+-      const finish =
+-        this.extractFinish(line);
++    if (parsed.brand && this.isInvalidBrand(parsed.brand)) {
++      parsed.brand = null;
++    }
+ 
+-      if (finish) {
+-        context.finish =
+-          finish;
+-      }
++    this.finalizeParsedProduct(parsed, items, context);
++    return 0;
++  }
+ 
+-      const pcs =
+-        this.extractPiecesPerBox(line);
++  private tryExtractStandaloneDispatchDate(
++    line: string,
++    nextLine: string | null,
++    afterNextLine: string | null,
++    index: number,
++    lines: string[],
++    context: SectionContext,
++    template: LearnedTemplateDefinition,
++    items: LearnedTileItem[]
++  ): number | null {
++    const dispatchDate =
++      this.extractDispatchDate(line) ??
++      this.extractLooseDispatchDate(line);
+ 
+-      if (pcs !== null) {
+-        context.piecesPerBox =
+-          pcs;
+-      }
++    if (!dispatchDate || !this.isDispatchDateLine(line)) {
++      return null;
++    }
+ 
+-      const brand =
+-        this.extractBrandFromHeading(line);
++    if (items.length > 0) {
++      const previous = items[items.length - 1];
+ 
+-      if (
+-        brand &&
+-        !this.isInvalidBrand(brand)
+-      ) {
+-        context.brand =
+-          brand;
++      if (previous) {
++        previous.dispatchDate = dispatchDate;
+       }
++    }
++
++    context.dispatchDate = null;
++    return 0;
++  }
+ 
+-      context.dispatchDate = null;
++  private tryExtractSectionHeading(
++    line: string,
++    nextLine: string | null,
++    afterNextLine: string | null,
++    index: number,
++    lines: string[],
++    context: SectionContext,
++    template: LearnedTemplateDefinition,
++    items: LearnedTileItem[]
++  ): number | null {
++    const detectedSize = this.extractSize(line);
+ 
+-      continue;
++    if (!detectedSize || !this.looksLikeSectionHeading(line)) {
++      return null;
+     }
+ 
+-    // ========================================================
+-    // 6. FINISH-ONLY HEADING
+-    // ========================================================
++    context.size = detectedSize;
+ 
+-    if (
+-      this.looksLikeFinishHeading(line)
+-    ) {
+-      const finish =
+-        this.extractFinish(line);
++    const finish = this.extractFinish(line);
++    if (finish) {
++      context.finish = finish;
++    }
+ 
+-      if (finish) {
+-        context.finish =
+-          finish;
+-      }
++    const pcs = this.extractPiecesPerBox(line);
++    if (pcs !== null) {
++      context.piecesPerBox = pcs;
++    }
+ 
+-      const pcs =
+-        this.extractPiecesPerBox(line);
++    const brand = this.extractBrandFromHeading(line);
++    if (brand && !this.isInvalidBrand(brand)) {
++      context.brand = brand;
++    }
+ 
+-      if (pcs !== null) {
+-        context.piecesPerBox =
+-          pcs;
+-      }
++    context.dispatchDate = null;
++    return 0;
++  }
+ 
+-      /*
+-       * IMPORTANT:
+-       *
+-       * A finish-only line must NEVER change brand.
+-       *
+-       * Example:
+-       *
+-       * (GLOSSY)
+-       * (MATT)
+-       * (HIGH GLOSSY)
+-       *
+-       * These describe the section finish only.
+-       */
+-      continue;
+-    }
+-
+-    // ========================================================
+-    // 7. BRAND / SERIES HEADING
+-    // ========================================================
++  private tryExtractFinishHeading(
++    line: string,
++    nextLine: string | null,
++    afterNextLine: string | null,
++    index: number,
++    lines: string[],
++    context: SectionContext,
++    template: LearnedTemplateDefinition,
++    items: LearnedTileItem[]
++  ): number | null {
++    if (!this.looksLikeFinishHeading(line)) {
++      return null;
++    }
+ 
+-    if (
+-      this.looksLikeBrandHeading(line)
+-    ) {
+-      const brand =
+-        this.extractBrandFromHeading(line);
++    const finish = this.extractFinish(line);
++    if (finish) {
++      context.finish = finish;
++    }
+ 
+-      if (
+-        brand &&
+-        !this.isInvalidBrand(brand)
+-      ) {
+-        context.brand =
+-          brand;
+-      }
++    const pcs = this.extractPiecesPerBox(line);
++    if (pcs !== null) {
++      context.piecesPerBox = pcs;
++    }
+ 
+-      const pcs =
+-        this.extractPiecesPerBox(line);
++    return 0;
++  }
+ 
+-      if (pcs !== null) {
+-        context.piecesPerBox =
+-          pcs;
+-      }
++  private tryExtractBrandHeading(
++    line: string,
++    nextLine: string | null,
++    afterNextLine: string | null,
++    index: number,
++    lines: string[],
++    context: SectionContext,
++    template: LearnedTemplateDefinition,
++    items: LearnedTileItem[]
++  ): number | null {
++    if (!this.looksLikeBrandHeading(line)) {
++      return null;
++    }
+ 
+-      const finish =
+-        this.extractFinish(line);
++    const brand = this.extractBrandFromHeading(line);
++    if (brand && !this.isInvalidBrand(brand)) {
++      context.brand = brand;
++    }
+ 
+-      if (finish) {
+-        context.finish =
+-          finish;
+-      }
++    const pcs = this.extractPiecesPerBox(line);
++    if (pcs !== null) {
++      context.piecesPerBox = pcs;
++    }
+ 
+-      const size =
+-        this.extractSize(line);
++    const finish = this.extractFinish(line);
++    if (finish) {
++      context.finish = finish;
++    }
+ 
+-      if (size) {
+-        context.size =
+-          size;
+-      }
++    const size = this.extractSize(line);
++    if (size) {
++      context.size = size;
++    }
+ 
+-      context.dispatchDate = null;
++    context.dispatchDate = null;
++    return 0;
++  }
+ 
+-      continue;
++  private tryExtractStructuralLine(
++    line: string,
++    nextLine: string | null,
++    afterNextLine: string | null,
++    index: number,
++    lines: string[],
++    context: SectionContext,
++    template: LearnedTemplateDefinition,
++    items: LearnedTileItem[]
++  ): number | null {
++    if (this.isStructuralLine(line)) {
++      return 0;
+     }
+ 
+-    // ========================================================
+-    // 8. STRUCTURAL LINE
+-    // ========================================================
+-
+-    if (
+-      this.isStructuralLine(line)
+-    ) {
+-      continue;
+-    }
+-
+-    // ========================================================
+-    // 9. FINAL FALLBACK
+-    // ========================================================
+-    //
+-    // This is deliberately conservative.
+-    //
+-    // We already handled:
+-    // - complete rows
+-    // - description + stock
+-    // - broken dispatch rows
+-    //
+-    // So anything reaching here should not be allowed
+-    // to modify section context accidentally.
+-    // ========================================================
++    return null;
++  }
+ 
++  private tryExtractFinalFallback(
++    line: string,
++    nextLine: string | null,
++    afterNextLine: string | null,
++    index: number,
++    lines: string[],
++    context: SectionContext,
++    template: LearnedTemplateDefinition,
++    items: LearnedTileItem[]
++  ): number | null {
+     if (
+-      nextLine &&
+-      this.looksLikeStockContinuation(nextLine) &&
+-      this.looksLikeProductName(line)
++      !nextLine ||
++      !this.looksLikeStockContinuation(nextLine) ||
++      !this.looksLikeProductName(line)
+     ) {
+-      const parsed =
+-        this.parseProductLine(
+-          `${line} ${nextLine}`,
+-          context,
+-          template
+-        );
+-
+-      if (
+-        parsed &&
+-        parsed.itemName &&
+-        parsed.stock !== null
+-      ) {
+-        parsed.itemName =
+-          this.cleanItemName(parsed.itemName);
+-
+-        parsed.dispatchDate = null;
+-
+-        if (
+-          parsed.brand &&
+-          this.isInvalidBrand(parsed.brand)
+-        ) {
+-          parsed.brand = null;
+-        }
+-
+-        items.push(parsed);
+-
+-        i++;
++      return null;
++    }
+ 
+-        context.dispatchDate = null;
++    const parsed = this.parseProductLine(
++      `${line} ${nextLine}`,
++      context,
++      template
++    );
+ 
+-        continue;
+-      }
++    if (!parsed || !parsed.itemName || parsed.stock === null) {
++      return null;
+     }
+-  }
+ 
+-  // ==========================================================
+-  // DEDUPLICATION
+-  // ==========================================================
++    parsed.itemName = this.cleanItemName(parsed.itemName);
++    parsed.dispatchDate = null;
+ 
+-  const deduplicated =
+-    this.deduplicateItems(items);
+-
+-  // ==========================================================
+-  // CONFIDENCE
+-  // ==========================================================
++    if (parsed.brand && this.isInvalidBrand(parsed.brand)) {
++      parsed.brand = null;
++    }
+ 
+-  let confidence = 0;
++    this.finalizeParsedProduct(parsed, items, context);
++    return 1;
++  }
+ 
+-  if (deduplicated.length > 0) {
+-    confidence = 85;
++  private finalizeParsedProduct(
++    parsed: LearnedTileItem,
++    items: LearnedTileItem[],
++    context: SectionContext
++  ): boolean {
++    if (!parsed.itemName || parsed.stock === null) {
++      return false;
++    }
+ 
+-    const incomplete =
+-      deduplicated.filter(
+-        (item) =>
+-          !item.itemName ||
+-          item.stock === null
+-      ).length;
++    parsed.itemName = this.cleanItemName(parsed.itemName);
+ 
+-    if (incomplete > 0) {
+-      confidence -= 10;
++    if (parsed.brand && this.isInvalidBrand(parsed.brand)) {
++      parsed.brand = null;
+     }
+-  }
+ 
+-  if (deduplicated.length === 0) {
+-    warnings.push(
+-      "Template matched, but no valid stock rows were extracted."
+-    );
++    items.push(parsed);
++    context.dispatchDate = null;
++    return true;
+   }
+ 
+-  return {
+-    items: deduplicated,
+-    confidence,
+-    warnings,
+-  };
+-}
+-
+   // ============================================================
+   // PRODUCT PARSING
+   // ============================================================

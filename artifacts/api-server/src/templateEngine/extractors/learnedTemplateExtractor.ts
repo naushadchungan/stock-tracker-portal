@@ -118,113 +118,162 @@ export class LearnedTemplateExtractor {
   // ============================================================
 
   private extractFromBlocks(
-  document: DocumentModel,
-  template: LearnedTemplateDefinition
-): LocalExtractionResult {
-  const items: LearnedTileItem[] = [];
-  const warnings: string[] = [];
+    document: DocumentModel,
+    template: LearnedTemplateDefinition
+  ): LocalExtractionResult {
+    const items: LearnedTileItem[] = [];
+    const warnings: string[] = [];
 
-  const context: SectionContext = {
-    brand: null,
-    finish: null,
-    size: null,
-    dispatchDate: null,
-    piecesPerBox: null,
-  };
+    const context: SectionContext = {
+      brand: null,
+      finish: null,
+      size: null,
+      dispatchDate: null,
+      piecesPerBox: null,
+    };
 
-  const lines = (document.blocks ?? [])
-    .map((block) =>
-      this.normalizeWhitespace(block.text)
-    )
-    .filter(Boolean);
+    const lines = (document.blocks ?? [])
+      .map((block) => this.normalizeWhitespace(block.text))
+      .filter(Boolean);
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+    for (let index = 0; index < lines.length; index++) {
+      const consumed = this.processBlockLine(
+        index,
+        lines,
+        context,
+        template,
+        items
+      );
+
+      if (consumed !== null) {
+        index += consumed;
+      }
+    }
+
+    const deduplicated =
+      this.deduplicateItems(items);
+
+    let confidence =
+      deduplicated.length > 0 ? 85 : 0;
+
+    if (deduplicated.length > 0) {
+      const incomplete =
+        deduplicated.filter(
+          (item) =>
+            !item.itemName ||
+            item.stock === null
+        ).length;
+
+      if (incomplete > 0) {
+        confidence -= 10;
+      }
+    }
+
+    if (deduplicated.length === 0) {
+      warnings.push(
+        "Template matched, but no valid stock rows were extracted."
+      );
+    }
+
+    return {
+      items: deduplicated,
+      confidence,
+      warnings,
+    };
+  }
+
+  private processBlockLine(
+    index: number,
+    lines: string[],
+    context: SectionContext,
+    template: LearnedTemplateDefinition,
+    items: LearnedTileItem[]
+  ): number | null {
+    const line = lines[index];
 
     if (!line) {
-      continue;
+      return null;
     }
 
     const nextLine =
-      i + 1 < lines.length
-        ? lines[i + 1]
+      index + 1 < lines.length
+        ? lines[index + 1]
         : null;
 
     const afterNextLine =
-      i + 2 < lines.length
-        ? lines[i + 2]
+      index + 2 < lines.length
+        ? lines[index + 2]
         : null;
-        // ========================================================
-// 0. DESCRIPTION + DISPATCH/STOCK ON SECOND LINE
-// ========================================================
-//
-// Some PDF generators visually render one table row but
-// expose the text layer in this order:
-//
-//   PRODUCT DESCRIPTION (PART
-//   CONTINUATION) (DESPATCH 0 0
-//   DATE : 27-07-2026)
-//
-// Example:
-//
-//   4X2 BEETHAS NEOMI BROWN (RANDOM
-//   4) (DESPATCH 0 0
-//   DATE : 27-07-2026)
-//
-// The stock values are embedded after DESPATCH rather than
-// appearing as a normal stock-only line.
-//
-// This rule is structural and supplier-independent.
-// ========================================================
 
-if (
-  nextLine &&
-  afterNextLine &&
-  /\b(?:DESPATCH|DISPATCH)\b/i.test(nextLine) &&
-  this.looksLikeProductName(line) &&
-  !this.isStructuralLine(line) &&
-  !this.isDispatchDateLine(line)
-) {
-  /*
-   * Find the BOX / PCS numbers at the end of the
-   * second physical line.
-   *
-   * Example:
-   *
-   * 4) (DESPATCH 0 0
-   *
-   * stockPart[1] = "4)"
-   * stockPart[2] = "0"
-   * stockPart[3] = "0"
-   */
-  const stockPart =
-    nextLine.match(
+    const handlers = [
+      this.tryExtractDescriptionDispatchStock,
+      this.tryExtractBrokenDispatchProduct,
+      this.tryExtractProductDescriptionAndStockNextLine,
+      this.tryExtractNormalCompleteProductRow,
+      this.tryExtractStandaloneDispatchDate,
+      this.tryExtractSectionHeading,
+      this.tryExtractFinishHeading,
+      this.tryExtractBrandHeading,
+      this.tryExtractStructuralLine,
+      this.tryExtractFinalFallback,
+    ];
+
+    for (const handler of handlers) {
+      const consumed = handler.call(
+        this,
+        line,
+        nextLine,
+        afterNextLine,
+        index,
+        lines,
+        context,
+        template,
+        items
+      );
+
+      if (consumed !== null) {
+        return consumed;
+      }
+    }
+
+    return null;
+  }
+
+  private tryExtractDescriptionDispatchStock(
+    line: string,
+    nextLine: string | null,
+    afterNextLine: string | null,
+    index: number,
+    lines: string[],
+    context: SectionContext,
+    template: LearnedTemplateDefinition,
+    items: LearnedTileItem[]
+  ): number | null {
+    if (
+      !nextLine ||
+      !afterNextLine ||
+      !/\b(?:DESPATCH|DISPATCH)\b/i.test(nextLine) ||
+      !this.looksLikeProductName(line) ||
+      this.isStructuralLine(line) ||
+      this.isDispatchDateLine(line)
+    ) {
+      return null;
+    }
+
+    const stockPart = nextLine.match(
       /^(.*?)\s*\(?\s*(?:DESPATCH|DISPATCH)\s+(-?\d[\d,]*(?:\.\d+)?)\s+(-?\d[\d,]*(?:\.\d+)?)\s*$/i
     );
 
-  if (stockPart) {
+    if (!stockPart) {
+      return null;
+    }
+
     const descriptionContinuation =
-      this.normalizeWhitespace(
-        stockPart[1] ?? ""
-      );
+      this.normalizeWhitespace(stockPart[1] ?? "");
 
-    const boxValue =
-      stockPart[2];
+    const boxValue = stockPart[2];
+    const pcsValue = stockPart[3];
 
-    const pcsValue =
-      stockPart[3];
-
-    /*
-     * Reconstruct the actual logical product:
-     *
-     * 4X2 BEETHAS NEOMI BROWN (RANDOM
-     * +
-     * 4)
-     *
-     * becomes:
-     *
-     * 4X2 BEETHAS NEOMI BROWN (RANDOM 4)
-     */
     const reconstructedDescription =
       this.normalizeWhitespace(
         `${line} ${descriptionContinuation}`
@@ -233,709 +282,442 @@ if (
     const reconstructedRow =
       `${reconstructedDescription} ${boxValue} ${pcsValue}`;
 
-    const parsed =
-      this.parseProductLine(
-        reconstructedRow,
-        context,
-        template
-      );
+    const parsed = this.parseProductLine(
+      reconstructedRow,
+      context,
+      template
+    );
 
+    if (!parsed || !parsed.itemName || parsed.stock === null) {
+      return null;
+    }
+
+    parsed.dispatchDate =
+      this.extractDispatchDate(`${nextLine} ${afterNextLine}`) ??
+      this.extractLooseDispatchDate(`${nextLine} ${afterNextLine}`);
+
+    if (parsed.brand && this.isInvalidBrand(parsed.brand)) {
+      parsed.brand = null;
+    }
+
+    this.finalizeParsedProduct(parsed, items, context);
+    return 2;
+  }
+
+  private tryExtractBrokenDispatchProduct(
+    line: string,
+    nextLine: string | null,
+    afterNextLine: string | null,
+    index: number,
+    lines: string[],
+    context: SectionContext,
+    template: LearnedTemplateDefinition,
+    items: LearnedTileItem[]
+  ): number | null {
     if (
-      parsed &&
-      parsed.itemName &&
-      parsed.stock !== null
+      !this.looksLikeBrokenDispatchProduct(line) ||
+      !nextLine ||
+      !this.looksLikeStockContinuation(nextLine)
     ) {
-      parsed.itemName =
-        this.cleanItemName(
-          parsed.itemName
-        );
+      return null;
+    }
 
-      /*
-       * Date normally continues onto the following
-       * physical line:
-       *
-       * DATE : 27-07-2026)
-       */
-      const dispatchText =
-        `${nextLine} ${afterNextLine}`;
+    const reconstructedDescription = line
+      .replace(/\(?\s*(?:DESPATCH|DISPATCH)\s*$/i, "")
+      .trim();
 
+    const reconstructed = `${reconstructedDescription} ${nextLine}`;
+
+    const parsed = this.parseProductLine(
+      reconstructed,
+      context,
+      template
+    );
+
+    if (!parsed || !parsed.itemName || parsed.stock === null) {
+      return null;
+    }
+
+    if (afterNextLine) {
       parsed.dispatchDate =
-        this.extractDispatchDate(
-          dispatchText
-        ) ??
-        this.extractLooseDispatchDate(
-          dispatchText
-        );
-
-      if (
-        parsed.brand &&
-        this.isInvalidBrand(
-          parsed.brand
-        )
-      ) {
-        parsed.brand = null;
-      }
-
-      items.push(parsed);
-
-      /*
-       * Consume:
-       *
-       * current description line
-       * continuation + DESPATCH + BOX/PCS
-       * DATE continuation
-       */
-      i += 2;
-
-      context.dispatchDate = null;
-
-      continue;
+        this.extractDispatchDate(`${line} ${afterNextLine}`) ??
+        this.extractLooseDispatchDate(`${line} ${afterNextLine}`);
+    } else {
+      parsed.dispatchDate = null;
     }
+
+    if (parsed.brand && this.isInvalidBrand(parsed.brand)) {
+      parsed.brand = null;
+    }
+
+    this.finalizeParsedProduct(parsed, items, context);
+
+    const extraConsumed =
+      afterNextLine && this.looksLikeDispatchContinuation(afterNextLine)
+        ? 2
+        : 1;
+
+    return extraConsumed;
   }
-}
 
-    // ========================================================
-    // 1. BROKEN DISPATCH PRODUCT
-    // ========================================================
-    //
-    // Example:
-    //
-    // 4X2 SPEROX 3D BROWN (DESPATCH
-    // 0 1
-    // DATE : 15-07-2026)
-    //
-    // This MUST be checked before heading detection.
-    // ========================================================
-
+  private tryExtractProductDescriptionAndStockNextLine(
+    line: string,
+    nextLine: string | null,
+    afterNextLine: string | null,
+    index: number,
+    lines: string[],
+    context: SectionContext,
+    template: LearnedTemplateDefinition,
+    items: LearnedTileItem[]
+  ): number | null {
     if (
-      this.looksLikeBrokenDispatchProduct(line) &&
-      nextLine &&
-      this.looksLikeStockContinuation(nextLine)
+      !nextLine ||
+      !this.looksLikeStockContinuation(nextLine) ||
+      !this.looksLikeProductName(line) ||
+      this.isDispatchDateLine(line) ||
+      this.isStructuralLine(line)
     ) {
-      const reconstructedDescription = line
-        .replace(
-          /\(?\s*(?:DESPATCH|DISPATCH)\s*$/i,
-          ""
-        )
-        .trim();
-
-      const reconstructed =
-        `${reconstructedDescription} ${nextLine}`;
-
-      const parsed =
-        this.parseProductLine(
-          reconstructed,
-          context,
-          template
-        );
-
-      if (
-        parsed &&
-        parsed.itemName &&
-        parsed.stock !== null
-      ) {
-        parsed.itemName =
-          this.cleanItemName(parsed.itemName);
-
-        /*
-         * The date may be on the third line.
-         */
-        if (afterNextLine) {
-          parsed.dispatchDate =
-            this.extractDispatchDate(
-              `${line} ${afterNextLine}`
-            ) ??
-            this.extractLooseDispatchDate(
-              `${line} ${afterNextLine}`
-            );
-        } else {
-          parsed.dispatchDate = null;
-        }
-
-        if (
-          parsed.brand &&
-          this.isInvalidBrand(parsed.brand)
-        ) {
-          parsed.brand = null;
-        }
-
-        items.push(parsed);
-
-        /*
-         * Consume stock line.
-         */
-        i++;
-
-        /*
-         * Consume:
-         *
-         * DATE : 15-07-2026)
-         */
-        if (
-          afterNextLine &&
-          this.looksLikeDispatchContinuation(
-            afterNextLine
-          )
-        ) {
-          i++;
-        }
-
-        context.dispatchDate = null;
-
-        continue;
-      }
+      return null;
     }
 
-    // ========================================================
-    // 2. PRODUCT DESCRIPTION + STOCK ON NEXT LINE
-    // ========================================================
-    //
-    // Examples:
-    //
-    // 800X2400 SHREEM ELEGANT WHITE
-    // 373 0
-    //
-    // 4X2 SUZORA GROVEL BROWN (MISHKA)
-    // 128 1
-    //
-    // 1X1 AARAV FLORRA TERACOTTA ( T.
-    // 944 3
-    // CYCLONE)
-    //
-    // This MUST also run before section detection.
-    // ========================================================
+    let description = line;
+    let consumedAfterStock = false;
 
-    if (
-      nextLine &&
-      this.looksLikeStockContinuation(nextLine) &&
-      this.looksLikeProductName(line) &&
-      !this.isDispatchDateLine(line) &&
-      !this.isStructuralLine(line)
-    ) {
-      let description = line;
-
-let consumedAfterStock = false;
-
-/*
- * PDF text extraction does not always preserve the
- * visual order of text inside a table cell.
- *
- * A visually single row such as:
- *
- *   4X2 BEETHAS NEOMI BROWN (RANDOM 4)
- *   (DESPATCH DATE : 27-07-2026)    0    0
- *
- * may be extracted as:
- *
- *   4X2 BEETHAS NEOMI BROWN (RANDOM
- *   0 0
- *   4)
- *   (DESPATCH DATE : 27-07-2026)
- *
- * Therefore the text immediately after the stock
- * line may still belong to the product description.
- *
- * This is intentionally generic. It does not depend
- * on BEETHAS, RANDOM, or any supplier name.
- */
-if (afterNextLine) {
-  const afterIsDescriptionContinuation =
-    this.looksLikeDescriptionContinuation(
-      line,
-      afterNextLine
-    );
-
-  /*
-   * Handle a dangling closing fragment such as:
-   *
-   *   (RANDOM
-   *   0 0
-   *   4)
-   *
-   *   (SEMI
-   *   342 1
-   *   HIGH GLOSSY)
-   *
-   *   ( T.
-   *   944 3
-   *   CYCLONE)
-   */
-  const hasUnclosedParenthesis =
-    (line.match(/\(/g) ?? []).length >
-    (line.match(/\)/g) ?? []).length;
-
-  const looksLikeClosingFragment =
-    hasUnclosedParenthesis &&
-    afterNextLine.length <= 80 &&
-    /\)/.test(afterNextLine) &&
-    !this.looksLikeStockContinuation(
-      afterNextLine
-    ) &&
-    !this.isDispatchDateLine(
-      afterNextLine
-    );
-
-  if (
-    afterIsDescriptionContinuation ||
-    looksLikeClosingFragment
-  ) {
-    description =
-      `${description} ${afterNextLine}`;
-
-    consumedAfterStock = true;
-  }
-}
-
-      const reconstructed =
-        `${description} ${nextLine}`;
-
-      const parsed =
-        this.parseProductLine(
-          reconstructed,
-          context,
-          template
-        );
-
-      if (
-        parsed &&
-        parsed.itemName &&
-        parsed.stock !== null
-      ) {
-        parsed.itemName =
-          this.cleanItemName(parsed.itemName);
-
-        /*
-         * Search the complete reconstructed text for
-         * a dispatch date.
-         */
-        /*
- * Search a slightly wider local window for a date.
- *
- * If afterNextLine was consumed as part of the
- * description, the dispatch date may be one line
- * further down.
- */
-const possibleDateLine =
-  consumedAfterStock &&
-  i + 3 < lines.length
-    ? lines[i + 3]
-    : afterNextLine;
-
-const dateSearchText =
-  `${line} ${afterNextLine ?? ""} ${possibleDateLine ?? ""}`;
-
-parsed.dispatchDate =
-  this.extractDispatchDate(
-    dateSearchText
-  ) ??
-  this.extractLooseDispatchDate(
-    dateSearchText
-  );
-
-        parsed.dispatchDate =
-          this.extractDispatchDate(
-            dateSearchText
-          ) ??
-          this.extractLooseDispatchDate(
-            dateSearchText
-          );
-
-        /*
-         * Protect brand from malformed context.
-         */
-        if (
-          parsed.brand &&
-          this.isInvalidBrand(parsed.brand)
-        ) {
-          parsed.brand = null;
-        }
-
-        items.push(parsed);
-
-        /*
-         * Consume stock line.
-         */
-        i++;
-
-        /*
-         * Also consume description continuation.
-         */
-        if (consumedAfterStock) {
-          i++;
-        }
-        /*
- * If the next line is a standalone dispatch date,
- * consume it too because it belongs to the product
- * we just reconstructed.
- */
-if (
-  i + 1 < lines.length
-) {
-  const possibleDispatchLine =
-    lines[i + 1];
-
-  if (
-    possibleDispatchLine &&
-    this.isDispatchDateLine(
-      possibleDispatchLine
-    )
-  ) {
-    const date =
-      this.extractDispatchDate(
-        possibleDispatchLine
-      ) ??
-      this.extractLooseDispatchDate(
-        possibleDispatchLine
-      );
-
-    if (date) {
-      parsed.dispatchDate = date;
-      i++;
-    }
-  }
-}
-
-        context.dispatchDate = null;
-
-        continue;
-      }
-    }
-
-    // ========================================================
-    // 3. NORMAL COMPLETE PRODUCT ROW
-    // ========================================================
-    //
-    // IMPORTANT:
-    //
-    // Try a normal product BEFORE deciding that the line
-    // is a size/brand/finish heading.
-    //
-    // This prevents product descriptions from polluting
-    // context.brand.
-    // ========================================================
-
-    if (
-      !this.isStructuralLine(line) &&
-      !this.isDispatchDateLine(line)
-    ) {
-      const parsed =
-        this.parseProductLine(
+    if (afterNextLine) {
+      const afterIsDescriptionContinuation =
+        this.looksLikeDescriptionContinuation(
           line,
-          context,
-          template
+          afterNextLine
         );
 
+      const hasUnclosedParenthesis =
+        (line.match(/\(/g) ?? []).length >
+        (line.match(/\)/g) ?? []).length;
+
+      const looksLikeClosingFragment =
+        hasUnclosedParenthesis &&
+        afterNextLine.length <= 80 &&
+        /\)/.test(afterNextLine) &&
+        !this.looksLikeStockContinuation(afterNextLine) &&
+        !this.isDispatchDateLine(afterNextLine);
+
       if (
-        parsed &&
-        parsed.itemName &&
-        parsed.stock !== null
+        afterIsDescriptionContinuation ||
+        looksLikeClosingFragment
       ) {
-        parsed.itemName =
-          this.cleanItemName(parsed.itemName);
-
-        const inlineDate =
-          this.extractDispatchDate(line) ??
-          this.extractLooseDispatchDate(line);
-
-        /*
-         * Never inherit a stale date.
-         */
-        parsed.dispatchDate =
-          inlineDate ?? null;
-
-        if (
-          parsed.brand &&
-          this.isInvalidBrand(parsed.brand)
-        ) {
-          parsed.brand = null;
-        }
-
-        items.push(parsed);
-
-        context.dispatchDate = null;
-
-        continue;
+        description = `${description} ${afterNextLine}`;
+        consumedAfterStock = true;
       }
     }
 
-    // ========================================================
-    // 4. STANDALONE DISPATCH DATE
-    // ========================================================
-    //
-    // Example:
-    //
-    // 4X2 SUZORA GROVEL BROWN (MISHKA)
-    // 128 1
-    // (DESPATCH DATE : 23-07-2026)
-    //
-    // The date belongs to the PREVIOUS product.
-    // It must never leak into the next product.
-    // ========================================================
+    const reconstructed = `${description} ${nextLine}`;
 
+    const parsed = this.parseProductLine(
+      reconstructed,
+      context,
+      template
+    );
+
+    if (!parsed || !parsed.itemName || parsed.stock === null) {
+      return null;
+    }
+
+    const possibleDateLine =
+      consumedAfterStock && index + 3 < lines.length
+        ? lines[index + 3]
+        : afterNextLine;
+
+    const dateSearchText =
+      `${line} ${afterNextLine ?? ""} ${possibleDateLine ?? ""}`;
+
+    parsed.dispatchDate =
+      this.extractDispatchDate(dateSearchText) ??
+      this.extractLooseDispatchDate(dateSearchText);
+
+    if (parsed.brand && this.isInvalidBrand(parsed.brand)) {
+      parsed.brand = null;
+    }
+
+    this.finalizeParsedProduct(parsed, items, context);
+
+    let consumedLines = 1;
+
+    if (consumedAfterStock) {
+      consumedLines += 1;
+    }
+
+    const dispatchDateLineIndex =
+      index + consumedLines + 1;
+
+    if (dispatchDateLineIndex < lines.length) {
+      const possibleDispatchLine = lines[dispatchDateLineIndex];
+
+      if (
+        possibleDispatchLine &&
+        this.isDispatchDateLine(possibleDispatchLine)
+      ) {
+        const date =
+          this.extractDispatchDate(possibleDispatchLine) ??
+          this.extractLooseDispatchDate(possibleDispatchLine);
+
+        if (date) {
+          parsed.dispatchDate = date;
+          consumedLines += 1;
+        }
+      }
+    }
+
+    return consumedLines;
+  }
+
+  private tryExtractNormalCompleteProductRow(
+    line: string,
+    nextLine: string | null,
+    afterNextLine: string | null,
+    index: number,
+    lines: string[],
+    context: SectionContext,
+    template: LearnedTemplateDefinition,
+    items: LearnedTileItem[]
+  ): number | null {
+    if (
+      this.isStructuralLine(line) ||
+      this.isDispatchDateLine(line)
+    ) {
+      return null;
+    }
+
+    const parsed = this.parseProductLine(
+      line,
+      context,
+      template
+    );
+
+    if (!parsed || !parsed.itemName || parsed.stock === null) {
+      return null;
+    }
+
+    const inlineDate =
+      this.extractDispatchDate(line) ??
+      this.extractLooseDispatchDate(line);
+
+    parsed.dispatchDate = inlineDate ?? null;
+
+    if (parsed.brand && this.isInvalidBrand(parsed.brand)) {
+      parsed.brand = null;
+    }
+
+    this.finalizeParsedProduct(parsed, items, context);
+    return 0;
+  }
+
+  private tryExtractStandaloneDispatchDate(
+    line: string,
+    nextLine: string | null,
+    afterNextLine: string | null,
+    index: number,
+    lines: string[],
+    context: SectionContext,
+    template: LearnedTemplateDefinition,
+    items: LearnedTileItem[]
+  ): number | null {
     const dispatchDate =
       this.extractDispatchDate(line) ??
       this.extractLooseDispatchDate(line);
 
-    if (
-      dispatchDate &&
-      this.isDispatchDateLine(line)
-    ) {
-      if (items.length > 0) {
-        const previous =
-          items[items.length - 1];
-
-        /*
-         * A standalone dispatch date immediately after
-         * a product belongs to that product.
-         */
-        if (previous) {
-          previous.dispatchDate =
-            dispatchDate;
-        }
-      }
-
-      context.dispatchDate = null;
-
-      continue;
+    if (!dispatchDate || !this.isDispatchDateLine(line)) {
+      return null;
     }
 
-    // ========================================================
-    // 5. SIZE / SECTION HEADING
-    // ========================================================
+    if (items.length > 0) {
+      const previous = items[items.length - 1];
 
-    const detectedSize =
-      this.extractSize(line);
-
-    if (
-      detectedSize &&
-      this.looksLikeSectionHeading(line)
-    ) {
-      context.size =
-        detectedSize;
-
-      const finish =
-        this.extractFinish(line);
-
-      if (finish) {
-        context.finish =
-          finish;
-      }
-
-      const pcs =
-        this.extractPiecesPerBox(line);
-
-      if (pcs !== null) {
-        context.piecesPerBox =
-          pcs;
-      }
-
-      const brand =
-        this.extractBrandFromHeading(line);
-
-      if (
-        brand &&
-        !this.isInvalidBrand(brand)
-      ) {
-        context.brand =
-          brand;
-      }
-
-      context.dispatchDate = null;
-
-      continue;
-    }
-
-    // ========================================================
-    // 6. FINISH-ONLY HEADING
-    // ========================================================
-
-    if (
-      this.looksLikeFinishHeading(line)
-    ) {
-      const finish =
-        this.extractFinish(line);
-
-      if (finish) {
-        context.finish =
-          finish;
-      }
-
-      const pcs =
-        this.extractPiecesPerBox(line);
-
-      if (pcs !== null) {
-        context.piecesPerBox =
-          pcs;
-      }
-
-      /*
-       * IMPORTANT:
-       *
-       * A finish-only line must NEVER change brand.
-       *
-       * Example:
-       *
-       * (GLOSSY)
-       * (MATT)
-       * (HIGH GLOSSY)
-       *
-       * These describe the section finish only.
-       */
-      continue;
-    }
-
-    // ========================================================
-    // 7. BRAND / SERIES HEADING
-    // ========================================================
-
-    if (
-      this.looksLikeBrandHeading(line)
-    ) {
-      const brand =
-        this.extractBrandFromHeading(line);
-
-      if (
-        brand &&
-        !this.isInvalidBrand(brand)
-      ) {
-        context.brand =
-          brand;
-      }
-
-      const pcs =
-        this.extractPiecesPerBox(line);
-
-      if (pcs !== null) {
-        context.piecesPerBox =
-          pcs;
-      }
-
-      const finish =
-        this.extractFinish(line);
-
-      if (finish) {
-        context.finish =
-          finish;
-      }
-
-      const size =
-        this.extractSize(line);
-
-      if (size) {
-        context.size =
-          size;
-      }
-
-      context.dispatchDate = null;
-
-      continue;
-    }
-
-    // ========================================================
-    // 8. STRUCTURAL LINE
-    // ========================================================
-
-    if (
-      this.isStructuralLine(line)
-    ) {
-      continue;
-    }
-
-    // ========================================================
-    // 9. FINAL FALLBACK
-    // ========================================================
-    //
-    // This is deliberately conservative.
-    //
-    // We already handled:
-    // - complete rows
-    // - description + stock
-    // - broken dispatch rows
-    //
-    // So anything reaching here should not be allowed
-    // to modify section context accidentally.
-    // ========================================================
-
-    if (
-      nextLine &&
-      this.looksLikeStockContinuation(nextLine) &&
-      this.looksLikeProductName(line)
-    ) {
-      const parsed =
-        this.parseProductLine(
-          `${line} ${nextLine}`,
-          context,
-          template
-        );
-
-      if (
-        parsed &&
-        parsed.itemName &&
-        parsed.stock !== null
-      ) {
-        parsed.itemName =
-          this.cleanItemName(parsed.itemName);
-
-        parsed.dispatchDate = null;
-
-        if (
-          parsed.brand &&
-          this.isInvalidBrand(parsed.brand)
-        ) {
-          parsed.brand = null;
-        }
-
-        items.push(parsed);
-
-        i++;
-
-        context.dispatchDate = null;
-
-        continue;
+      if (previous) {
+        previous.dispatchDate = dispatchDate;
       }
     }
+
+    context.dispatchDate = null;
+    return 0;
   }
 
-  // ==========================================================
-  // DEDUPLICATION
-  // ==========================================================
+  private tryExtractSectionHeading(
+    line: string,
+    nextLine: string | null,
+    afterNextLine: string | null,
+    index: number,
+    lines: string[],
+    context: SectionContext,
+    template: LearnedTemplateDefinition,
+    items: LearnedTileItem[]
+  ): number | null {
+    const detectedSize = this.extractSize(line);
 
-  const deduplicated =
-    this.deduplicateItems(items);
-
-  // ==========================================================
-  // CONFIDENCE
-  // ==========================================================
-
-  let confidence = 0;
-
-  if (deduplicated.length > 0) {
-    confidence = 85;
-
-    const incomplete =
-      deduplicated.filter(
-        (item) =>
-          !item.itemName ||
-          item.stock === null
-      ).length;
-
-    if (incomplete > 0) {
-      confidence -= 10;
+    if (!detectedSize || !this.looksLikeSectionHeading(line)) {
+      return null;
     }
+
+    context.size = detectedSize;
+
+    const finish = this.extractFinish(line);
+    if (finish) {
+      context.finish = finish;
+    }
+
+    const pcs = this.extractPiecesPerBox(line);
+    if (pcs !== null) {
+      context.piecesPerBox = pcs;
+    }
+
+    const brand = this.extractBrandFromHeading(line);
+    if (brand && !this.isInvalidBrand(brand)) {
+      context.brand = brand;
+    }
+
+    context.dispatchDate = null;
+    return 0;
   }
 
-  if (deduplicated.length === 0) {
-    warnings.push(
-      "Template matched, but no valid stock rows were extracted."
+  private tryExtractFinishHeading(
+    line: string,
+    nextLine: string | null,
+    afterNextLine: string | null,
+    index: number,
+    lines: string[],
+    context: SectionContext,
+    template: LearnedTemplateDefinition,
+    items: LearnedTileItem[]
+  ): number | null {
+    if (!this.looksLikeFinishHeading(line)) {
+      return null;
+    }
+
+    const finish = this.extractFinish(line);
+    if (finish) {
+      context.finish = finish;
+    }
+
+    const pcs = this.extractPiecesPerBox(line);
+    if (pcs !== null) {
+      context.piecesPerBox = pcs;
+    }
+
+    return 0;
+  }
+
+  private tryExtractBrandHeading(
+    line: string,
+    nextLine: string | null,
+    afterNextLine: string | null,
+    index: number,
+    lines: string[],
+    context: SectionContext,
+    template: LearnedTemplateDefinition,
+    items: LearnedTileItem[]
+  ): number | null {
+    if (!this.looksLikeBrandHeading(line)) {
+      return null;
+    }
+
+    const brand = this.extractBrandFromHeading(line);
+    if (brand && !this.isInvalidBrand(brand)) {
+      context.brand = brand;
+    }
+
+    const pcs = this.extractPiecesPerBox(line);
+    if (pcs !== null) {
+      context.piecesPerBox = pcs;
+    }
+
+    const finish = this.extractFinish(line);
+    if (finish) {
+      context.finish = finish;
+    }
+
+    const size = this.extractSize(line);
+    if (size) {
+      context.size = size;
+    }
+
+    context.dispatchDate = null;
+    return 0;
+  }
+
+  private tryExtractStructuralLine(
+    line: string,
+    nextLine: string | null,
+    afterNextLine: string | null,
+    index: number,
+    lines: string[],
+    context: SectionContext,
+    template: LearnedTemplateDefinition,
+    items: LearnedTileItem[]
+  ): number | null {
+    if (this.isStructuralLine(line)) {
+      return 0;
+    }
+
+    return null;
+  }
+
+  private tryExtractFinalFallback(
+    line: string,
+    nextLine: string | null,
+    afterNextLine: string | null,
+    index: number,
+    lines: string[],
+    context: SectionContext,
+    template: LearnedTemplateDefinition,
+    items: LearnedTileItem[]
+  ): number | null {
+    if (
+      !nextLine ||
+      !this.looksLikeStockContinuation(nextLine) ||
+      !this.looksLikeProductName(line)
+    ) {
+      return null;
+    }
+
+    const parsed = this.parseProductLine(
+      `${line} ${nextLine}`,
+      context,
+      template
     );
+
+    if (!parsed || !parsed.itemName || parsed.stock === null) {
+      return null;
+    }
+
+    parsed.itemName = this.cleanItemName(parsed.itemName);
+    parsed.dispatchDate = null;
+
+    if (parsed.brand && this.isInvalidBrand(parsed.brand)) {
+      parsed.brand = null;
+    }
+
+    this.finalizeParsedProduct(parsed, items, context);
+    return 1;
   }
 
-  return {
-    items: deduplicated,
-    confidence,
-    warnings,
-  };
-}
+  private finalizeParsedProduct(
+    parsed: LearnedTileItem,
+    items: LearnedTileItem[],
+    context: SectionContext
+  ): boolean {
+    if (!parsed.itemName || parsed.stock === null) {
+      return false;
+    }
+
+    parsed.itemName = this.cleanItemName(parsed.itemName);
+
+    if (parsed.brand && this.isInvalidBrand(parsed.brand)) {
+      parsed.brand = null;
+    }
+
+    items.push(parsed);
+    context.dispatchDate = null;
+    return true;
+  }
 
   // ============================================================
   // PRODUCT PARSING
