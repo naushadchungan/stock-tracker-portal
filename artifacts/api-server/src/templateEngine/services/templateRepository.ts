@@ -1,10 +1,8 @@
-import { db } from "../../db";
-import { learnedTemplatesTable } from "../../db/schema";
+import { db, learnedTemplatesTable } from "@workspace/db";
 
 import { eq } from "drizzle-orm";
 
-import type { LearnedTemplateDefinition }
-from "../models/learningResult";
+import type { LearnedTemplateDefinition } from "../models/learnedTemplate.js";
 
 export class TemplateRepository {
 
