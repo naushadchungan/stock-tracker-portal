@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import type { AuthUser } from '@workspace/api-zod';
+import type { AuthUser } from '../../../../lib/api-zod/src/generated/types/authUser';
 import { db, sessionsTable } from '@workspace/db';
 import { eq } from 'drizzle-orm';
 import { type Request, type Response } from 'express';
