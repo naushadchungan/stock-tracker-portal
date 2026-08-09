@@ -1,31 +1,28 @@
 import { type NextFunction, type Request, type Response } from 'express';
 import { getSession, getSessionId } from '../lib/auth';
+import type { AuthUser } from '../../../../lib/api-zod/src/generated/types/authUser';
 
-type AuthenticatedRequest = Request & {
-  user?: {
-    id: number;
-    username: string;
-    email: string | null;
-    firstName: string | null;
-    lastName: string | null;
-    profileImageUrl: string | null;
-    role: string;
-  };
+type AuthUserShape = AuthUser;
+
+type AuthenticatedRequest = Omit<Request, 'user'> & {
+  user?: AuthUserShape;
   isAuthenticated: () => boolean;
 };
 
 export async function authMiddleware(
-  req: AuthenticatedRequest,
+  req: Request,
   _res: Response,
   next: NextFunction,
 ): Promise<void> {
+  const authenticatedReq = req as AuthenticatedRequest;
+
   const sid = getSessionId(req);
   if (sid) {
     const session = await getSession(sid);
     if (session?.user) {
-      req.user = session.user;
+      authenticatedReq.user = session.user;
     }
   }
-  req.isAuthenticated = () => !!req.user;
+  authenticatedReq.isAuthenticated = () => !!authenticatedReq.user;
   next();
 }
