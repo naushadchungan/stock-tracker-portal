@@ -3,9 +3,9 @@ import {
   DocumentProfile,
   ParseResult,
   RecognitionResult,
-} from "../interfaces";
+} from "./interfaces";
 
-import { parseTextPdf } from "../../services/textParser";
+import { parseTextPdf } from "../services/textParser";
 
 export class StanzaParser implements DocumentParser {
 
