@@ -1,4 +1,4 @@
-import { extractLayoutA, extractShreem } from "./extractor";
+import { extractShreem } from "./extractor";
 import type {
   DocumentParser,
   DocumentProfile,
