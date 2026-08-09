@@ -1,5 +1,5 @@
-import { LearnedTemplateDefinition } from "../types/LearnedTemplateDefinition";
-import { ParsedItem } from "../../types/pdf";
+import type { LearnedTemplateDefinition } from "../models/learnedTemplate";
+import type { ParsedItem } from "../../types/pdf";
 
 export interface LearningResult {
 
