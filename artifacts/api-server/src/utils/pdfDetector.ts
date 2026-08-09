@@ -1,4 +1,4 @@
-import pdfParse from "pdf-parse";
+import { PDFParse } from "pdf-parse";
 
 export interface PdfDetectionResult {
   isSearchable: boolean;
@@ -10,15 +10,19 @@ export interface PdfDetectionResult {
 export async function detectPdfType(
   buffer: Buffer
 ): Promise<PdfDetectionResult> {
+  const parser = new PDFParse({ data: buffer });
 
-  const pdf = await pdfParse(buffer);
+  try {
+    const pdf = await parser.getText();
+    const text = (pdf?.text || "").trim();
 
-  const text = (pdf.text || "").trim();
-
-  return {
-    isSearchable: text.length > 500,
-    textLength: text.length,
-    pageCount: pdf.numpages,
-    extractedText: text,
-  };
+    return {
+      isSearchable: text.length > 500,
+      textLength: text.length,
+      pageCount: 0,
+      extractedText: text,
+    };
+  } finally {
+    await parser.destroy();
+  }
 }
