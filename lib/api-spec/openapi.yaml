@@ -664,6 +664,22 @@ components:
         completedAt:
           type: ["string", "null"]
           format: date-time
+        processingTimeMs:
+          type: ["integer", "null"]
+        parserUsed:
+          type: ["string", "null"]
+        templateMatched:
+          type: ["string", "null"]
+        similarityScore:
+          type: ["number", "null"]
+        confidenceScore:
+          type: ["number", "null"]
+        confidenceDecision:
+          type: ["string", "null"]
+        claudeUsed:
+          type: ["boolean", "null"]
+        validationRequired:
+          type: ["boolean", "null"]
       required:
         - id
         - depotId
