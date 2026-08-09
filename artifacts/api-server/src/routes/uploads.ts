@@ -542,8 +542,8 @@ function logRawTextPreview(
 async function parseImageOnlyPdf(
   pageImages: {
     b64: string;
-    y: number;
     page: number;
+    mime: string;
   }[],
   images: {
     b64: string;
