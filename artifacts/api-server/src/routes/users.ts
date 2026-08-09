@@ -6,6 +6,25 @@ import { requireAdmin } from '../middlewares/requireAuth';
 
 const SALT_ROUNDS = 12;
 
+function normalizeSingleId(value: string | string[] | undefined): string | null {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length !== 1) {
+      return null;
+    }
+
+    const [first] = value;
+    const trimmed = typeof first === 'string' ? first.trim() : '';
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  return null;
+}
+
 const router: IRouter = Router();
 
 // GET /api/users — list all users (admin only)
@@ -76,7 +95,12 @@ router.post('/', requireAdmin, async (req, res) => {
 
 // PATCH /api/users/:id — update role or password (admin only)
 router.patch('/:id', requireAdmin, async (req, res) => {
-  const { id } = req.params;
+  const id = normalizeSingleId(req.params.id);
+  if (!id) {
+    res.status(400).json({ error: 'Invalid user id' });
+    return;
+  }
+
   const { role, password, email, firstName, lastName } = req.body ?? {};
 
   if (role && !['admin', 'user'].includes(role)) {
@@ -115,10 +139,15 @@ router.patch('/:id', requireAdmin, async (req, res) => {
 
 // DELETE /api/users/:id — delete user (admin only)
 router.delete('/:id', requireAdmin, async (req, res) => {
-  const { id } = req.params;
+  const id = normalizeSingleId(req.params.id);
+  if (!id) {
+    res.status(400).json({ error: 'Invalid user id' });
+    return;
+  }
 
   // Prevent deleting yourself
-  if (id === req.user?.id) {
+  const currentUserId = req.user?.id != null ? String(req.user.id) : null;
+  if (currentUserId && id === currentUserId) {
     res.status(400).json({ error: 'You cannot delete your own account' });
     return;
   }
